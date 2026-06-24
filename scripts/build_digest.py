@@ -1028,13 +1028,12 @@ def main() -> None:
     board = gather_board()
     watchlist = gather_watchlist()
 
+    digest = digest_without_ai(news)
     if args.ai:
-        print("- Modus: mit KI-Zusammenfassung")
-        digest = summarize_with_claude(news, ticker)
+        print("- Modus: mit KI-Experten-Kommentar (Schlagzeilen bleiben faktenbasiert)")
         digest["expert"] = expert_commentary(watchlist, news)
     else:
-        print("- Modus: ohne KI (Schlagzeilen-Aggregation)")
-        digest = digest_without_ai(news)
+        print("- Modus: ohne KI (nur Schlagzeilen-Aggregation)")
 
     page = render_html(digest, ticker, board, watchlist, now)
     write_outputs(page, now)

@@ -30,13 +30,11 @@ jobs:
       - name: Abhängigkeiten installieren
         run: pip install -r requirements.txt
 
-      - name: Digest erzeugen (ohne KI – Standard)
-        run: python scripts/build_digest.py
-        # Für KI-Zusammenfassung stattdessen folgende Zeilen nutzen und ein
-        # Secret ANTHROPIC_API_KEY hinterlegen:
-        #   env:
-        #     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        #   run: python scripts/build_digest.py --ai
+      - name: Digest erzeugen (mit KI-Experten-Kommentar)
+        env:
+          # Wird sicher aus den GitHub-Secrets injiziert und in Logs maskiert.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/build_digest.py --ai
 
       - name: Ergebnis committen & pushen
         run: |
