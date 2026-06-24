@@ -244,7 +244,10 @@ def fetch_feed(url: str) -> list[dict]:
         return []
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=TIME_WINDOW_HOURS)
-    source = parsed.feed.get("title", "") if parsed.feed else ""
+    feed_title = parsed.feed.get("title", "") if parsed.feed else ""
+    # Google-News-Feeds liefern als Feed-Titel die Suchanfrage – unbrauchbar.
+    if len(feed_title) > 40:
+        feed_title = ""
     items = []
     for e in parsed.entries:
         ts = _entry_time(e)
@@ -254,12 +257,16 @@ def fetch_feed(url: str) -> list[dict]:
         link = (e.get("link") or "").strip()
         if not title or not link:
             continue
+        # Echter Verlag: Google News liefert ihn pro Eintrag in e.source.title.
+        src = e.get("source")
+        publisher = src.get("title", "") if isinstance(src, dict) else ""
+        source_name = publisher or feed_title or _domain(link)
         summary = _strip_html(e.get("summary") or "")[:400]
         items.append(
             {
                 "headline": title,
                 "url": link,
-                "source": source or _domain(link),
+                "source": source_name,
                 "snippet": summary,
                 "image": _entry_image(e),
                 "favicon": _favicon(e, link),
@@ -378,6 +385,7 @@ def gather_watchlist() -> list[dict]:
         out.append(
             {
                 "name": name,
+                "symbol": sym,
                 "last": last,
                 "pct": q["pct"],
                 "p5": perf(5),    # ca. 1 Woche
@@ -387,6 +395,11 @@ def gather_watchlist() -> list[dict]:
         )
     print(f"    {len(out)} Kurse")
     return out
+
+
+def _quote_link(symbol: str) -> str:
+    """Link auf die Yahoo-Finance-Kursseite (Live-Kurs + Chart)."""
+    return f"https://finance.yahoo.com/quote/{quote(symbol)}" if symbol else "#"
 
 
 def fmt_price(v: float) -> str:
@@ -631,8 +644,12 @@ def render_analysis(rows: list[dict], ai_text: str = "") -> str:
     trs = []
     for r in sorted(rows, key=lambda x: x["name"]):
         tcls = {"Aufwärts": "up", "Abwärts": "down"}.get(r["trend"], "neu")
+        nm = (
+            f'<a class="nmlink" href="{e(_quote_link(r.get("symbol", "")))}" '
+            f'target="_blank" rel="noopener noreferrer">{e(r["name"])}</a>'
+        )
         trs.append(
-            f'<tr><td class="nm">{e(r["name"])}</td>'
+            f'<tr><td class="nm">{nm}</td>'
             f'{cell(r["pct"])}{cell(r["p5"])}{cell(r["p20"])}'
             f'<td class="trend {tcls}">{e(r["trend"])}</td></tr>'
         )
@@ -674,10 +691,13 @@ def render_watchlist(quotes: list[dict]) -> str:
         cls = "up" if q["pct"] >= 0 else "down"
         sign = "+" if q["pct"] >= 0 else ""
         arr = "▲" if q["pct"] >= 0 else "▼"
+        url = _quote_link(q.get("symbol", ""))
         cells.append(
-            f'<div class="bcell {cls}"><span class="bname">{e(q["name"])}</span>'
+            f'<a class="bcell {cls}" href="{e(url)}" target="_blank" rel="noopener noreferrer">'
+            f'<span class="bname">{e(q["name"])}</span>'
             f'<span class="bval">{fmt_price(q["last"])}</span>'
-            f'<span class="bpct"><span class="arr">{arr}</span> {sign}{q["pct"]:.2f}%</span></div>'
+            f'<span class="bpct"><span class="arr">{arr}</span> {sign}{q["pct"]:.2f}%</span>'
+            f'<span class="blink">Kurs &amp; Chart ›</span></a>'
         )
     return f'<section class="marketboard">{highlight}<div class="board">{"".join(cells)}</div></section>'
 
@@ -717,7 +737,11 @@ def render_html(
         summary_html = f'<p class="tabsummary">{e(summary)}</p>' if summary else ""
         cards = []
         for it in tab.get("items", []):
-            insight = f'<p>{e(it["insight"])}</p>' if it.get("insight") else ""
+            ins = (it.get("insight") or "").strip()
+            # Teaser weglassen, wenn er nur die Schlagzeile wiederholt.
+            if ins[:40].lower() == it["headline"][:40].lower():
+                ins = ""
+            insight = f'<p>{e(ins)}</p>' if ins else ""
             safe = _safe_url(it.get("url", ""))
             if safe:
                 title_html = (
@@ -775,24 +799,26 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <meta http-equiv="refresh" content="1800">
 <title>Mein Finanz-Briefing</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@600;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
   :root {{
     --bg:#0a0f18; --bg2:#0d1626; --card:#101b2e; --line:#1f3048;
     --line-soft:#17243a; --text:#e9edf4; --muted:#8ea4c0; --muted2:#647488;
     --gold:#5b9dd9; --gold-bright:#8ec5ff; --up:#4fc78a; --down:#e0796d;
   }}
   * {{ box-sizing:border-box; }}
+  html, body {{ overflow-x:hidden; max-width:100%; }}
   body {{ margin:0; color:var(--text); line-height:1.6;
           font-family:'Inter',system-ui,sans-serif; -webkit-font-smoothing:antialiased;
           background:radial-gradient(1200px 540px at 50% -220px,#16304f 0%,transparent 70%),var(--bg); }}
-  .wrap {{ max-width:880px; margin:0 auto; padding:0 20px 80px; }}
+  .wrap {{ max-width:880px; margin:0 auto; padding:0 18px 80px; width:100%; }}
   a {{ color:inherit; }}
+  .hl, .card p, .src, .briefing li, .tabsummary {{ overflow-wrap:anywhere; }}
 
   header {{ text-align:center; padding:46px 0 26px; }}
   .kicker {{ font-size:.7rem; letter-spacing:.34em; text-transform:uppercase;
              color:var(--gold); margin-bottom:14px; font-weight:500; }}
-  header h1 {{ font-family:'Playfair Display',Georgia,serif; font-weight:700;
-               font-size:2.5rem; line-height:1.1; margin:0; letter-spacing:.01em; }}
+  header h1 {{ font-family:'Inter',system-ui,sans-serif; font-weight:700;
+               font-size:2.2rem; line-height:1.1; margin:0; letter-spacing:-.02em; }}
   .rule {{ width:64px; height:1px; margin:20px auto 16px;
            background:linear-gradient(90deg,transparent,var(--gold),transparent); }}
   .datum {{ color:var(--muted); font-size:.82rem; letter-spacing:.02em; }}
@@ -810,7 +836,7 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .briefing {{ background:linear-gradient(180deg,var(--bg2),transparent);
                border:1px solid var(--line); border-radius:14px;
                padding:22px 26px; margin-bottom:34px; }}
-  .briefing h2 {{ font-family:'Playfair Display',serif; font-weight:600;
+  .briefing h2 {{ font-family:'Inter',system-ui,sans-serif; font-weight:600;
                   font-size:1.05rem; margin:0 0 14px; color:var(--gold-bright); }}
   .briefing ul {{ margin:0; padding:0; list-style:none; }}
   .briefing li {{ position:relative; padding-left:22px; margin:9px 0; color:#cfd3da; }}
@@ -843,13 +869,18 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .bcell .bpct {{ font-size:.8rem; font-weight:500; font-variant-numeric:tabular-nums; }}
   .bcell.up .bpct {{ color:var(--up); }}
   .bcell.down .bpct {{ color:var(--down); }}
+  a.bcell {{ text-decoration:none; color:inherit; cursor:pointer; }}
+  .blink {{ font-size:.66rem; color:var(--gold); margin-top:5px; letter-spacing:.04em; }}
+  a.bcell:hover .blink {{ color:var(--gold-bright); }}
+  .nmlink {{ color:inherit; text-decoration:none; border-bottom:1px dotted var(--muted2); }}
+  .nmlink:hover {{ color:var(--gold-bright); border-color:var(--gold-bright); }}
 
   .card {{ display:flex; gap:18px; border-bottom:1px solid var(--line-soft); padding:20px 2px; }}
   .card:first-of-type {{ padding-top:4px; }}
   .ctext {{ flex:1; min-width:0; }}
   .thumb {{ width:132px; height:99px; object-fit:cover; border-radius:12px; order:2;
             border:1px solid var(--line); flex-shrink:0; background:var(--card); }}
-  .card .hl {{ font-family:'Playfair Display',Georgia,serif; color:var(--text); font-weight:600;
+  .card .hl {{ font-family:'Inter',system-ui,sans-serif; color:var(--text); font-weight:600;
                text-decoration:none; font-size:1.22rem; line-height:1.35; display:block; transition:.2s; }}
   a.hl:hover {{ color:var(--gold-bright); }}
   .card p {{ margin:8px 0 10px; color:#b9c3d4; font-size:.95rem; }}
@@ -858,13 +889,17 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .fav {{ width:18px; height:18px; border-radius:5px; flex-shrink:0;
           background:var(--card); }}
   .arr {{ font-size:.7em; }}
-  @media (max-width:560px) {{ .thumb {{ width:96px; height:74px; }} .card {{ gap:12px; }} }}
+  @media (max-width:560px) {{
+    .thumb {{ width:96px; height:74px; }} .card {{ gap:12px; }}
+    .atable {{ font-size:.75rem; }}
+    .atable th, .atable td {{ padding:7px 4px; }}
+  }}
   .empty {{ color:var(--muted); text-align:center; padding:40px 0; font-style:italic; }}
 
   .analysis {{ background:linear-gradient(180deg,var(--bg2),transparent);
                border:1px solid var(--line); border-radius:14px;
                padding:22px 24px; margin-bottom:26px; }}
-  .analysis h2 {{ font-family:'Playfair Display',serif; font-weight:600;
+  .analysis h2 {{ font-family:'Inter',system-ui,sans-serif; font-weight:600;
                   font-size:1.15rem; margin:0 0 4px; color:var(--gold-bright); }}
   .asub {{ color:var(--muted2); font-size:.7rem; letter-spacing:.05em;
            text-transform:uppercase; margin:0 0 18px; }}
@@ -873,8 +908,9 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .achip {{ font-size:.8rem; font-weight:600; padding:4px 11px; border-radius:999px;
             border:1px solid var(--line); font-variant-numeric:tabular-nums; }}
   .achip.up {{ color:var(--up); }} .achip.down {{ color:var(--down); }}
-  .atable {{ width:100%; border-collapse:collapse; margin-top:16px;
+  .atable {{ width:100%; border-collapse:collapse; margin-top:16px; table-layout:fixed;
              font-size:.85rem; font-variant-numeric:tabular-nums; }}
+  .atable td.nm {{ overflow-wrap:anywhere; }}
   .atable th {{ text-align:right; font-weight:500; color:var(--muted2);
                font-size:.68rem; text-transform:uppercase; letter-spacing:.06em;
                padding:6px 8px; border-bottom:1px solid var(--line); }}
@@ -957,7 +993,7 @@ def write_outputs(page_html: str, now: datetime) -> None:
         "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Playfair+Display:wght@700&display=swap');"
         "body{font-family:'Inter',system-ui,sans-serif;background:#0a0c10;color:#ece9e2;"
         "max-width:600px;margin:0 auto;padding:50px 20px;line-height:1.6;}"
-        "h1{font-family:'Playfair Display',serif;font-weight:700;font-size:2rem;margin:0 0 6px;}"
+        "h1{font-family:'Inter',system-ui,sans-serif;font-weight:700;font-size:2rem;margin:0 0 6px;}"
         "a{color:#c8a86a;text-decoration:none;}a:hover{color:#e6cd94;}"
         ".back{font-size:.85rem;}"
         "ul{list-style:none;padding:0;margin:24px 0 0;}"
