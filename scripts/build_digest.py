@@ -365,10 +365,10 @@ TV_SYMBOLS: dict[str, str] = {
     "TSLA": "NASDAQ:TSLA",
     "SAP.DE": "XETR:SAP", "SIE.DE": "XETR:SIE", "ALV.DE": "XETR:ALV",
     "MBG.DE": "XETR:MBG", "VOW3.DE": "XETR:VOW3", "DBK.DE": "XETR:DBK",
-    "^GSPC": "SP:SPX", "^GDAXI": "XETR:DAX", "^IXIC": "NASDAQ:IXIC",
-    "^DJI": "DJ:DJI", "^FTSE": "TVC:UKX", "^N225": "TVC:NI225",
+    "^GSPC": "TVC:SPX", "^GDAXI": "XETR:DAX", "^IXIC": "NASDAQ:IXIC",
+    "^DJI": "TVC:DJI", "^FTSE": "TVC:UKX", "^N225": "TVC:NI225",
     "EURUSD=X": "FX:EURUSD", "EURCHF=X": "FX:EURCHF", "USDJPY=X": "FX:USDJPY",
-    "GC=F": "TVC:GOLD", "CL=F": "TVC:USOIL",
+    "GC=F": "TVC:GOLD", "CL=F": "NYMEX:CL1!",  # WTI-Future (fortlaufend)
     "BTC-USD": "COINBASE:BTCUSD", "ETH-USD": "COINBASE:ETHUSD",
 }
 
