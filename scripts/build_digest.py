@@ -58,9 +58,36 @@ def _gnews(query: str) -> str:
     return "https://news.google.com/rss/search?q=" + quote(query) + "&hl=de&gl=DE&ceid=DE:de"
 
 
+# Persönliche Aktien-Watchlist: Stooq-Symbol -> Anzeigename.
+# US-Aktien enden auf ".us", deutsche (Xetra) auf ".de".
+WATCHLIST: dict[str, str] = {
+    "aapl.us": "Apple",
+    "msft.us": "Microsoft",
+    "nvda.us": "Nvidia",
+    "amzn.us": "Amazon",
+    "googl.us": "Alphabet",
+    "meta.us": "Meta",
+    "tsla.us": "Tesla",
+    "sap.de": "SAP",
+    "sie.de": "Siemens",
+    "alv.de": "Allianz",
+    "mbg.de": "Mercedes-Benz",
+    "vow3.de": "Volkswagen",
+}
+
+
+def _watchlist_query() -> str:
+    names = " OR ".join(f'"{n}"' for n in WATCHLIST.values())
+    return _gnews(f"({names}) Aktie when:2d")
+
+
 # Reiter und ihre RSS-Quellen. Reihenfolge = Reiter-Reihenfolge.
 # Der Reiter "extras" zeigt zusätzlich oben das Markt-Board (s. MARKET_BOARD).
 TABS: dict[str, dict] = {
+    "watchlist": {
+        "title": "Meine Watchlist",
+        "feeds": [_watchlist_query()],
+    },
     "maerkte": {
         "title": "Aktien & Märkte",
         "feeds": [
@@ -264,6 +291,17 @@ def gather_board() -> dict[str, list[dict]]:
     return board
 
 
+def gather_watchlist() -> list[dict]:
+    print("- Lade Watchlist-Kurse …")
+    out = []
+    for sym, name in WATCHLIST.items():
+        q = fetch_quote(sym)
+        if q:
+            out.append({"name": name, "last": q["last"], "pct": q["pct"]})
+    print(f"    {len(out)} Kurse")
+    return out
+
+
 def fmt_price(v: float) -> str:
     a = abs(v)
     if a >= 1000:
@@ -434,7 +472,37 @@ def render_board(board: dict[str, list[dict]]) -> str:
     return f'<section class="marketboard">{highlight}{"".join(sections)}</section>'
 
 
-def render_html(digest: dict, ticker: list[dict], board: dict, now: datetime) -> str:
+def render_watchlist(quotes: list[dict]) -> str:
+    """Flaches Kurs-Grid für den Watchlist-Reiter, sortiert nach Tagesgewinn."""
+    e = html.escape
+    if not quotes:
+        return '<p class="empty">Keine Watchlist-Kurse verfügbar.</p>'
+    rows = sorted(quotes, key=lambda q: q["pct"], reverse=True)
+    mover = max(quotes, key=lambda q: abs(q["pct"]))
+    msign = "+" if mover["pct"] >= 0 else ""
+    highlight = (
+        f'<p class="bhi">Größte Tagesbewegung: <b>{e(mover["name"])}</b> '
+        f'{msign}{mover["pct"]:.2f}%</p>'
+    )
+    cells = []
+    for q in rows:
+        cls = "up" if q["pct"] >= 0 else "down"
+        sign = "+" if q["pct"] >= 0 else ""
+        cells.append(
+            f'<div class="bcell {cls}"><span class="bname">{e(q["name"])}</span>'
+            f'<span class="bval">{fmt_price(q["last"])}</span>'
+            f'<span class="bpct">{sign}{q["pct"]:.2f}%</span></div>'
+        )
+    return f'<section class="marketboard">{highlight}<div class="board">{"".join(cells)}</div></section>'
+
+
+def render_html(
+    digest: dict,
+    ticker: list[dict],
+    board: dict,
+    watchlist: list[dict],
+    now: datetime,
+) -> str:
     e = html.escape
     datum = now.strftime("%A, %d. %B %Y · %H:%M Uhr")
 
@@ -471,8 +539,12 @@ def render_html(digest: dict, ticker: list[dict], board: dict, now: datetime) ->
                 f'<span class="src">{e(it.get("source", ""))}</span></article>'
             )
         cards_html = "".join(cards) or '<p class="empty">Heute keine Meldungen.</p>'
-        # Im Extras-Reiter das Markt-Board oben anzeigen.
-        extra = board_html if tid == "extras" else ""
+        # Im Extras-Reiter das Markt-Board, im Watchlist-Reiter die Kurstafel oben.
+        extra = ""
+        if tid == "extras":
+            extra = board_html
+        elif tid == "watchlist":
+            extra = render_watchlist(watchlist)
         panels.append(
             f'<div class="panel{active}" id="panel-{tid}">{extra}{summary_html}{cards_html}</div>'
         )
@@ -628,6 +700,7 @@ def main() -> None:
     news = gather_news()
     ticker = gather_ticker()
     board = gather_board()
+    watchlist = gather_watchlist()
 
     if args.ai:
         print("- Modus: mit KI-Zusammenfassung")
@@ -636,7 +709,7 @@ def main() -> None:
         print("- Modus: ohne KI (Schlagzeilen-Aggregation)")
         digest = digest_without_ai(news)
 
-    page = render_html(digest, ticker, board, now)
+    page = render_html(digest, ticker, board, watchlist, now)
     write_outputs(page, now)
     print("✓ docs/index.html geschrieben.")
 

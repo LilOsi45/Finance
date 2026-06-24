@@ -4,8 +4,10 @@ Ein privates, tägliches Finanz- und Nachrichten-Dashboard – die wichtigsten
 Schlagzeilen kompakt nach Thema sortiert, plus ein Markt-Board. Wird jeden
 Morgen automatisch erstellt.
 
-Vier Reiter:
+Fünf Reiter:
 
+0. **Meine Watchlist** – deine Lieblingsaktien mit Kurs + Tagesveränderung
+   (nach Tagesgewinn sortiert) und passenden Schlagzeilen
 1. **Aktien & Märkte** – Indizes, Einzelwerte, Quartalszahlen, Zinsen/Zentralbanken
 2. **International Management & Wirtschaft** – Strategie, M&A, Welthandel, Zentralbanken
 3. **Weltnachrichten** – wichtigste politische/geopolitische Ereignisse
@@ -65,6 +67,7 @@ Danach `docs/index.html` im Browser öffnen.
 
 In `scripts/build_digest.py` im Block **KONFIGURATION**:
 
+- `WATCHLIST` – deine Aktien (Stooq-Symbol → Name; US endet auf `.us`, DE auf `.de`)
 - `TABS` – Reiter und ihre RSS-Quellen (Quellen ergänzen/entfernen)
 - `TICKER_SYMBOLS` / `MARKET_BOARD` – Kurse im Ticker bzw. im Markt-Board (Stooq-Symbole)
 - `TIME_WINDOW_HOURS`, `MAX_ITEMS_PER_TAB` – Zeitfenster und Umfang
@@ -81,6 +84,5 @@ E-Mail-Versand umstellen.
 ## Mögliche Ausbaustufen
 
 - KI-Zusammenfassung (s. o.)
-- Persönliche Watchlist eigener Aktien im Ticker/Board
 - Wirtschaftskalender (anstehende Zinsentscheide, Quartalszahlen)
 - Optionale Morgen-E-Mail mit Link zum Dashboard
