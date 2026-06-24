@@ -299,24 +299,27 @@ def fetch_quote(symbol: str) -> dict | None:
     url = (
         "https://query1.finance.yahoo.com/v8/finance/chart/"
         + quote(symbol)
-        + "?range=5d&interval=1d"
+        + "?range=1mo&interval=1d"
     )
     try:
         resp = requests.get(url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
         resp.raise_for_status()
         res = resp.json()["chart"]["result"][0]
         meta = res.get("meta", {})
+        try:
+            hist = [c for c in res["indicators"]["quote"][0]["close"] if c is not None]
+        except Exception:
+            hist = []
         # Bevorzugt: aktueller Kurs + Vortagesschluss aus den Metadaten.
         last = meta.get("regularMarketPrice")
         prev = meta.get("chartPreviousClose") or meta.get("previousClose")
         if last is None or prev is None:
             # Fallback: letzte zwei Tagesschlüsse aus der Zeitreihe.
-            closes = [c for c in res["indicators"]["quote"][0]["close"] if c is not None]
-            if len(closes) < 2:
+            if len(hist) < 2:
                 return None
-            last, prev = closes[-1], closes[-2]
+            last, prev = hist[-1], hist[-2]
         pct = (last - prev) / prev * 100 if prev else 0.0
-        return {"last": float(last), "pct": float(pct)}
+        return {"last": float(last), "pct": float(pct), "hist": [float(c) for c in hist]}
     except Exception as exc:
         print(f"  ! Kurs-Fehler {symbol}: {exc}", file=sys.stderr)
         return None
@@ -353,8 +356,35 @@ def gather_watchlist() -> list[dict]:
     out = []
     for sym, name in WATCHLIST.items():
         q = fetch_quote(sym)
-        if q:
-            out.append({"name": name, "last": q["last"], "pct": q["pct"]})
+        if not q:
+            continue
+        hist = q.get("hist", [])
+        last = q["last"]
+
+        def perf(days: int) -> float | None:
+            if len(hist) > days and hist[-1 - days]:
+                return (last / hist[-1 - days] - 1) * 100
+            return None
+
+        trend = "–"
+        if len(hist) >= 5:
+            sma = sum(hist) / len(hist)
+            if last > sma * 1.01:
+                trend = "Aufwärts"
+            elif last < sma * 0.99:
+                trend = "Abwärts"
+            else:
+                trend = "Seitwärts"
+        out.append(
+            {
+                "name": name,
+                "last": last,
+                "pct": q["pct"],
+                "p5": perf(5),    # ca. 1 Woche
+                "p20": perf(20),  # ca. 1 Monat
+                "trend": trend,
+            }
+        )
     print(f"    {len(out)} Kurse")
     return out
 
@@ -485,6 +515,46 @@ def summarize_with_claude(news: dict[str, list[dict]], ticker: list[dict]) -> di
     return data
 
 
+def expert_commentary(watchlist: list[dict], news: dict[str, list[dict]]) -> str:
+    """Kurze, professionelle Einordnung der Watchlist (nur mit --ai + Key).
+    Bewusst OHNE erfundene Kursziele – seriöse Beobachtung statt Versprechen."""
+    import anthropic
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return ""
+    rows = [
+        {k: r.get(k) for k in ("name", "pct", "p5", "p20", "trend")}
+        for r in watchlist
+    ]
+    headlines = [it["headline"] for it in news.get("watchlist", [])][:12]
+    sys_prompt = (
+        "Du bist erfahrener Aktien-Analyst einer Privatbank und schreibst auf "
+        "Deutsch eine kurze, sachliche Einordnung (4–6 Sätze) zur Watchlist des "
+        "Kunden. Stütze dich nur auf die gelieferten Kennzahlen und Schlagzeilen. "
+        "Nenne konkrete Chancen UND Risiken. Erfinde KEINE Kursziele und KEINE "
+        "Renditeversprechen. Kein Marketing, kein Hype – nüchtern und hochwertig."
+    )
+    user_msg = (
+        "Kennzahlen (pct=heute, p5=1 Woche, p20=1 Monat, jeweils %):\n"
+        f"{json.dumps(rows, ensure_ascii=False)}\n\n"
+        f"Aktuelle Schlagzeilen zur Watchlist:\n- " + "\n- ".join(headlines)
+    )
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        print(f"- Erstelle Experten-Kommentar ({MODEL}) …")
+        resp = client.messages.create(
+            model=MODEL,
+            max_tokens=600,
+            system=sys_prompt,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        return next((b.text for b in resp.content if b.type == "text"), "").strip()
+    except Exception as exc:
+        print(f"  ! Experten-Kommentar fehlgeschlagen: {exc}", file=sys.stderr)
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # 4. HTML-Dashboard rendern
 # ---------------------------------------------------------------------------
@@ -531,6 +601,60 @@ def render_board(board: dict[str, list[dict]]) -> str:
             f'<h3 class="bgroup">{e(group)}</h3><div class="board">{"".join(cells)}</div>'
         )
     return f'<section class="marketboard">{highlight}{"".join(sections)}</section>'
+
+
+def render_analysis(rows: list[dict], ai_text: str = "") -> str:
+    """Faktenbasierte Experten-Einordnung der Watchlist + optionaler KI-Kommentar."""
+    e = html.escape
+    if not rows:
+        return ""
+
+    def key5(r: dict) -> float:
+        return r["p5"] if r["p5"] is not None else r["pct"]
+
+    ranked = sorted(rows, key=key5, reverse=True)
+    top, bottom = ranked[:3], ranked[-3:][::-1]
+
+    def chip(r: dict) -> str:
+        v = key5(r)
+        cls = "up" if v >= 0 else "down"
+        sign = "+" if v >= 0 else ""
+        return f'<span class="achip {cls}">{e(r["name"])} {sign}{v:.1f}%</span>'
+
+    def cell(v: float | None) -> str:
+        if v is None:
+            return '<td class="na">–</td>'
+        cls = "up" if v >= 0 else "down"
+        sign = "+" if v >= 0 else ""
+        return f'<td class="{cls}">{sign}{v:.1f}%</td>'
+
+    trs = []
+    for r in sorted(rows, key=lambda x: x["name"]):
+        tcls = {"Aufwärts": "up", "Abwärts": "down"}.get(r["trend"], "neu")
+        trs.append(
+            f'<tr><td class="nm">{e(r["name"])}</td>'
+            f'{cell(r["pct"])}{cell(r["p5"])}{cell(r["p20"])}'
+            f'<td class="trend {tcls}">{e(r["trend"])}</td></tr>'
+        )
+    table = (
+        "<table class='atable'><thead><tr><th>Wert</th><th>1 Tag</th>"
+        "<th>1 Woche</th><th>1 Monat</th><th>Trend</th></tr></thead><tbody>"
+        + "".join(trs)
+        + "</tbody></table>"
+    )
+    ai_block = (
+        f'<div class="aikom"><b>Einordnung des Analysten:</b> {e(ai_text)}</div>'
+        if ai_text
+        else ""
+    )
+    return (
+        '<section class="analysis"><h2>Experten-Einordnung</h2>'
+        '<p class="asub">Faktenbasiert aus aktuellen Kursdaten · Bildung &amp; '
+        'Einordnung, keine Anlageberatung</p>'
+        f'<div class="arow"><span class="alabel">▲ Stärkste (1 Woche)</span>{"".join(chip(r) for r in top)}</div>'
+        f'<div class="arow"><span class="alabel">▼ Schwächste (1 Woche)</span>{"".join(chip(r) for r in bottom)}</div>'
+        f'{table}{ai_block}</section>'
+    )
 
 
 def render_watchlist(quotes: list[dict]) -> str:
@@ -626,7 +750,7 @@ def render_html(
         if tid == "extras":
             extra = board_html
         elif tid == "watchlist":
-            extra = render_watchlist(watchlist)
+            extra = render_analysis(watchlist, digest.get("expert", "")) + render_watchlist(watchlist)
         panels.append(
             f'<div class="panel{active}" id="panel-{tid}">{extra}{summary_html}{cards_html}</div>'
         )
@@ -737,6 +861,34 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   @media (max-width:560px) {{ .thumb {{ width:96px; height:74px; }} .card {{ gap:12px; }} }}
   .empty {{ color:var(--muted); text-align:center; padding:40px 0; font-style:italic; }}
 
+  .analysis {{ background:linear-gradient(180deg,var(--bg2),transparent);
+               border:1px solid var(--line); border-radius:14px;
+               padding:22px 24px; margin-bottom:26px; }}
+  .analysis h2 {{ font-family:'Playfair Display',serif; font-weight:600;
+                  font-size:1.15rem; margin:0 0 4px; color:var(--gold-bright); }}
+  .asub {{ color:var(--muted2); font-size:.7rem; letter-spacing:.05em;
+           text-transform:uppercase; margin:0 0 18px; }}
+  .arow {{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:10px; }}
+  .alabel {{ font-size:.8rem; color:var(--muted); margin-right:4px; }}
+  .achip {{ font-size:.8rem; font-weight:600; padding:4px 11px; border-radius:999px;
+            border:1px solid var(--line); font-variant-numeric:tabular-nums; }}
+  .achip.up {{ color:var(--up); }} .achip.down {{ color:var(--down); }}
+  .atable {{ width:100%; border-collapse:collapse; margin-top:16px;
+             font-size:.85rem; font-variant-numeric:tabular-nums; }}
+  .atable th {{ text-align:right; font-weight:500; color:var(--muted2);
+               font-size:.68rem; text-transform:uppercase; letter-spacing:.06em;
+               padding:6px 8px; border-bottom:1px solid var(--line); }}
+  .atable th:first-child {{ text-align:left; }}
+  .atable td {{ text-align:right; padding:9px 8px; border-bottom:1px solid var(--line-soft); }}
+  .atable td.nm {{ text-align:left; color:var(--text); }}
+  .atable td.up {{ color:var(--up); }} .atable td.down {{ color:var(--down); }}
+  .atable td.na {{ color:var(--muted2); }}
+  .atable td.trend {{ font-size:.78rem; }}
+  .trend.up {{ color:var(--up); }} .trend.down {{ color:var(--down); }} .trend.neu {{ color:var(--muted); }}
+  .aikom {{ margin-top:18px; padding-top:16px; border-top:1px solid var(--line);
+            color:#c7d2e2; font-size:.92rem; line-height:1.7; }}
+  .aikom b {{ color:var(--gold-bright); font-weight:600; }}
+
   .archiv {{ display:inline-block; margin-top:30px; color:var(--gold); text-decoration:none;
              font-size:.8rem; letter-spacing:.04em; }}
   .archiv:hover {{ color:var(--gold-bright); }}
@@ -843,6 +995,7 @@ def main() -> None:
     if args.ai:
         print("- Modus: mit KI-Zusammenfassung")
         digest = summarize_with_claude(news, ticker)
+        digest["expert"] = expert_commentary(watchlist, news)
     else:
         print("- Modus: ohne KI (Schlagzeilen-Aggregation)")
         digest = digest_without_ai(news)
