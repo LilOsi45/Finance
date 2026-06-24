@@ -287,6 +287,10 @@ def fetch_feed(url: str) -> list[dict]:
         src = e.get("source")
         publisher = src.get("title", "") if isinstance(src, dict) else ""
         source_name = publisher or feed_title or _domain(link)
+        # FT-RSS liefert als Titel nur die Rubrik ("World"/"Companies") –
+        # für ft.com-Artikel den echten Verlagsnamen setzen.
+        if _domain(link).endswith("ft.com"):
+            source_name = "Financial Times"
         summary = _strip_html(e.get("summary") or "")[:400]
         items.append(
             {
