@@ -73,6 +73,7 @@ WATCHLIST: dict[str, str] = {
     "alv.de": "Allianz",
     "mbg.de": "Mercedes-Benz",
     "vow3.de": "Volkswagen",
+    "dbk.de": "Deutsche Bank",
 }
 
 
