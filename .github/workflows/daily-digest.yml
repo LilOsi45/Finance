@@ -32,9 +32,8 @@ jobs:
 
       - name: Digest erzeugen (mit KI-Experten-Kommentar)
         env:
-          # Werden sicher aus den GitHub-Secrets injiziert und in Logs maskiert.
+          # Wird sicher aus den GitHub-Secrets injiziert und in Logs maskiert.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          TWELVEDATA_API_KEY: ${{ secrets.TWELVEDATA_API_KEY }}
         run: python scripts/build_digest.py --ai
 
       - name: Ergebnis committen & pushen

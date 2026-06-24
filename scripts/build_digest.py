@@ -339,116 +339,95 @@ def gather_news() -> dict[str, list[dict]]:
 
 
 # ---------------------------------------------------------------------------
-# 2. Marktdaten (Twelve Data, gebündelt – kostenloser API-Key)
+# 2. Marktdaten (TradingView-Scanner, ohne API-Key)
+#    Liefert Kurs, Tagesänderung, RSI, 52-Wochen-Spanne, Wochen-/Monats-
+#    Performance, Volatilität und das offizielle TradingView-Rating – alles
+#    in einem einzigen Abruf, ohne Login.
 # ---------------------------------------------------------------------------
 
-TD_BASE = "https://api.twelvedata.com"
+TV_SCAN_URL = "https://scanner.tradingview.com/global/scan"
+TV_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; FinanceDigest/1.0)",
+    "Origin": "https://www.tradingview.com",
+    "Referer": "https://www.tradingview.com/",
+    "Content-Type": "application/json",
+}
+TV_COLUMNS = [
+    "close", "change", "Perf.W", "Perf.1M", "RSI",
+    "Recommend.All", "Recommend.MA", "Recommend.Other",
+    "price_52_week_high", "price_52_week_low", "Volatility.D", "currency",
+]
 
-# Internes Symbol -> Twelve-Data-Symbol. Bei Bedarf hier einzeln anpassen.
-TD_SYMBOLS: dict[str, str] = {
-    # Aktien (US: Kürzel; Deutschland: <Kürzel>:XETR)
-    "AAPL": "AAPL", "MSFT": "MSFT", "NVDA": "NVDA", "AMZN": "AMZN",
-    "GOOGL": "GOOGL", "META": "META", "TSLA": "TSLA",
-    "SAP.DE": "SAP:XETR", "SIE.DE": "SIE:XETR", "ALV.DE": "ALV:XETR",
-    "MBG.DE": "MBG:XETR", "VOW3.DE": "VOW3:XETR", "DBK.DE": "DBK:XETR",
-    # Indizes
-    "^GSPC": "GSPC", "^GDAXI": "GDAXI", "^IXIC": "IXIC", "^DJI": "DJI",
-    "^FTSE": "FTSE", "^N225": "N225",
-    # Währungen
-    "EURUSD=X": "EUR/USD", "EURCHF=X": "EUR/CHF", "USDJPY=X": "USD/JPY",
-    # Rohstoffe
-    "GC=F": "XAU/USD", "CL=F": "WTI/USD",
-    # Krypto
-    "BTC-USD": "BTC/USD", "ETH-USD": "ETH/USD",
+# Internes Symbol -> TradingView-Ticker (BÖRSE:KÜRZEL). Bei Bedarf anpassen.
+TV_SYMBOLS: dict[str, str] = {
+    "AAPL": "NASDAQ:AAPL", "MSFT": "NASDAQ:MSFT", "NVDA": "NASDAQ:NVDA",
+    "AMZN": "NASDAQ:AMZN", "GOOGL": "NASDAQ:GOOGL", "META": "NASDAQ:META",
+    "TSLA": "NASDAQ:TSLA",
+    "SAP.DE": "XETR:SAP", "SIE.DE": "XETR:SIE", "ALV.DE": "XETR:ALV",
+    "MBG.DE": "XETR:MBG", "VOW3.DE": "XETR:VOW3", "DBK.DE": "XETR:DBK",
+    "^GSPC": "SP:SPX", "^GDAXI": "XETR:DAX", "^IXIC": "NASDAQ:IXIC",
+    "^DJI": "DJ:DJI", "^FTSE": "TVC:UKX", "^N225": "TVC:NI225",
+    "EURUSD=X": "FX:EURUSD", "EURCHF=X": "FX:EURCHF", "USDJPY=X": "FX:USDJPY",
+    "GC=F": "TVC:GOLD", "CL=F": "TVC:USOIL",
+    "BTC-USD": "COINBASE:BTCUSD", "ETH-USD": "COINBASE:ETHUSD",
 }
 
 
-def _td_key() -> str:
-    return os.environ.get("TWELVEDATA_API_KEY", "")
-
-
-def td_quotes(internal_syms) -> dict[str, dict]:
-    """Aktuelle Kurse + Tagesänderung + 52-Wochen-Spanne, gebündelt in 1 Abruf."""
-    key = _td_key()
+def tv_scan(internal_syms) -> dict[str, dict]:
+    """Holt alle Kennzahlen für die Symbole in einem TradingView-Scan-Abruf."""
     out: dict[str, dict] = {}
-    if not key:
-        print("  ! TWELVEDATA_API_KEY fehlt – keine Kurse.", file=sys.stderr)
+    tvmap = {s: TV_SYMBOLS[s] for s in internal_syms if s in TV_SYMBOLS}
+    tickers = sorted(set(tvmap.values()))
+    if not tickers:
         return out
-    tdmap = {s: TD_SYMBOLS.get(s, s) for s in internal_syms}
-    td_list = ",".join(sorted(set(tdmap.values())))
-    url = f"{TD_BASE}/quote?symbol={quote(td_list)}&apikey={key}&dp=4"
+    payload = {
+        "symbols": {"tickers": tickers, "query": {"types": []}},
+        "columns": TV_COLUMNS,
+    }
     try:
-        resp = requests.get(url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
+        resp = requests.post(
+            TV_SCAN_URL, json=payload, headers=TV_HEADERS, timeout=HTTP_TIMEOUT
+        )
         resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict) and "symbol" in data:  # Einzelsymbol-Antwort
-            data = {data["symbol"]: data}
-        for internal, td in tdmap.items():
-            d = data.get(td) if isinstance(data, dict) else None
-            if not isinstance(d, dict) or not d.get("close"):
+        by_ticker = {row["s"]: row["d"] for row in resp.json().get("data", [])}
+        for internal, tv in tvmap.items():
+            d = by_ticker.get(tv)
+            if not d:
+                continue
+            rec = dict(zip(TV_COLUMNS, d))
+            if rec.get("close") is None:
                 continue
             try:
-                fw = d.get("fifty_two_week") or {}
                 out[internal] = {
-                    "last": float(d["close"]),
-                    "pct": float(d.get("percent_change") or 0),
-                    "w52h": float(fw["high"]) if fw.get("high") else None,
-                    "w52l": float(fw["low"]) if fw.get("low") else None,
-                    "currency": d.get("currency", ""),
+                    "last": float(rec["close"]),
+                    "pct": float(rec.get("change") or 0),
+                    "perfW": rec.get("Perf.W"),
+                    "perf1M": rec.get("Perf.1M"),
+                    "rsi": rec.get("RSI"),
+                    "rec": rec.get("Recommend.All"),
+                    "recMA": rec.get("Recommend.MA"),
+                    "recOther": rec.get("Recommend.Other"),
+                    "w52h": rec.get("price_52_week_high"),
+                    "w52l": rec.get("price_52_week_low"),
+                    "vol": rec.get("Volatility.D"),
+                    "currency": rec.get("currency", ""),
                 }
             except (TypeError, ValueError):
                 continue
     except Exception as exc:
-        print(f"  ! Twelve-Data-Quote-Fehler: {exc}", file=sys.stderr)
+        print(f"  ! TradingView-Scan-Fehler: {exc}", file=sys.stderr)
     return out
 
 
-def td_series(internal_syms, outputsize: int = 252) -> dict[str, list[float]]:
-    """Tägliche Schlusskurse (aufsteigend), gebündelt in 1 Abruf."""
-    key = _td_key()
-    out: dict[str, list[float]] = {}
-    if not key:
-        return out
-    tdmap = {s: TD_SYMBOLS.get(s, s) for s in internal_syms}
-    td_list = ",".join(sorted(set(tdmap.values())))
-    url = (
-        f"{TD_BASE}/time_series?symbol={quote(td_list)}&interval=1day"
-        f"&outputsize={outputsize}&order=ASC&apikey={key}&dp=4"
-    )
-    try:
-        resp = requests.get(url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict) and "values" in data:  # Einzelsymbol-Antwort
-            data = {next(iter(set(tdmap.values()))): data}
-        for internal, td in tdmap.items():
-            node = data.get(td) if isinstance(data, dict) else None
-            vals = node.get("values") if isinstance(node, dict) else None
-            if not vals:
-                continue
-            closes = []
-            for v in vals:
-                try:
-                    closes.append(float(v["close"]))
-                except (TypeError, ValueError, KeyError):
-                    pass
-            if closes:
-                out[internal] = closes
-    except Exception as exc:
-        print(f"  ! Twelve-Data-Series-Fehler: {exc}", file=sys.stderr)
-    return out
-
-
-def fetch_market_data() -> tuple[dict, dict]:
+def fetch_market_data() -> dict:
     all_syms = (
         set(WATCHLIST) | set(TICKER_SYMBOLS)
         | {s for g in MARKET_BOARD.values() for s in g}
     )
-    print("- Lade Marktdaten (Twelve Data) …")
-    quotes = td_quotes(all_syms)
-    series = td_series(set(WATCHLIST), outputsize=252)
-    print(f"    {len(quotes)} Kurse, {len(series)} Zeitreihen")
-    return quotes, series
+    print("- Lade Marktdaten (TradingView) …")
+    data = tv_scan(all_syms)
+    print(f"    {len(data)} Kurse")
+    return data
 
 
 def gather_ticker(quotes: dict) -> list[dict]:
@@ -473,123 +452,67 @@ def gather_board(quotes: dict) -> dict[str, list[dict]]:
     return board
 
 
-def _sma(closes: list[float], n: int) -> float | None:
-    return sum(closes[-n:]) / n if len(closes) >= n else None
+def _rating_label(rec) -> tuple[str, str, int]:
+    """TradingView-Rating (-1..1) -> (Label, CSS-Klasse, Score -5..5)."""
+    r = rec if isinstance(rec, (int, float)) else 0.0
+    if r >= 0.5:
+        lab, cls = "Stark Kaufen", "buy"
+    elif r >= 0.1:
+        lab, cls = "Kaufen", "buy"
+    elif r > -0.1:
+        lab, cls = "Neutral", "hold"
+    elif r > -0.5:
+        lab, cls = "Verkaufen", "sell"
+    else:
+        lab, cls = "Stark Verkaufen", "sell"
+    return lab, cls, max(-5, min(5, round(r * 5)))
 
 
-def _rsi(closes: list[float], period: int = 14) -> float | None:
-    """Relative-Strength-Index (klassisch, einfache Mittelung)."""
-    if len(closes) < period + 1:
-        return None
-    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))][-period:]
-    gain = sum(d for d in deltas if d > 0) / period
-    loss = sum(-d for d in deltas if d < 0) / period
-    if loss == 0:
-        return 100.0
-    rs = gain / loss
-    return 100 - 100 / (1 + rs)
+def _rec_word(v) -> str:
+    v = v if isinstance(v, (int, float)) else 0.0
+    return "Kaufen" if v >= 0.1 else "Verkaufen" if v <= -0.1 else "Neutral"
 
 
-def _volatility(hist: list[float]) -> float | None:
-    """Annualisierte Volatilität (in %) aus täglichen Renditen."""
-    pts = [c for c in hist if c]
-    if len(pts) < 3:
-        return None
-    import statistics
-    rets = [pts[i] / pts[i - 1] - 1 for i in range(1, len(pts))]
-    return statistics.pstdev(rets) * (252 ** 0.5) * 100
-
-
-def _ea_score(last: float, hist: list[float], p5, p20) -> dict:
-    """Transparentes, regelbasiertes Signal aus 5 technischen Faktoren."""
-    score = 0
-    reasons: list[str] = []
-    sma20 = _sma(hist, 20) or (sum(hist) / len(hist) if hist else None)
-    sma5 = _sma(hist, 5)
-    rsi = _rsi(hist)
-
-    if sma20:
-        if last > sma20:
-            score += 1; reasons.append("über 20-Tage-Schnitt")
-        elif last < sma20:
-            score -= 1; reasons.append("unter 20-Tage-Schnitt")
-    if p5 is not None:
-        if p5 > 2:
-            score += 1; reasons.append("starkes Wochen-Momentum")
-        elif p5 < -2:
-            score -= 1; reasons.append("schwaches Wochen-Momentum")
-    if p20 is not None:
-        if p20 > 3:
-            score += 1; reasons.append("positiver Monatstrend")
-        elif p20 < -3:
-            score -= 1; reasons.append("negativer Monatstrend")
-    if sma5 and sma20:
-        if sma5 > sma20:
-            score += 1; reasons.append("kurzfr. Schnitt über langfr.")
-        elif sma5 < sma20:
-            score -= 1; reasons.append("kurzfr. Schnitt unter langfr.")
-    if rsi is not None:
-        if rsi < 30:
-            score += 1; reasons.append(f"überverkauft (RSI {rsi:.0f})")
-        elif rsi > 70:
-            score -= 1; reasons.append(f"überkauft (RSI {rsi:.0f})")
-
-    signal = "Kaufen" if score >= 2 else "Verkaufen" if score <= -2 else "Halten"
-    return {"score": score, "signal": signal, "rsi": rsi, "reasons": reasons}
-
-
-def gather_watchlist(quotes: dict, series: dict) -> list[dict]:
+def gather_watchlist(data: dict) -> list[dict]:
+    """Watchlist-Zeilen mit TradingView-Rating + Kennzahlen aufbauen."""
     out = []
     for sym, name in WATCHLIST.items():
-        q = quotes.get(sym)
+        q = data.get(sym)
         if not q:
             continue
-        hist = series.get(sym, [])
-        last = q["last"]
-
-        def perf(days: int) -> float | None:
-            if len(hist) > days and hist[-1 - days]:
-                return (last / hist[-1 - days] - 1) * 100
-            return None
-
-        # Trend gegen den ~1-Monats-Schnitt (letzte 22 Handelstage).
-        ref = hist[-22:] if len(hist) >= 22 else hist
-        trend = "–"
-        if len(ref) >= 5:
-            sma = sum(ref) / len(ref)
-            if last > sma * 1.01:
-                trend = "Aufwärts"
-            elif last < sma * 0.99:
-                trend = "Abwärts"
-            else:
-                trend = "Seitwärts"
-        p5, p20 = perf(5), perf(20)
-        ea = _ea_score(last, hist, p5, p20)
-        spark = hist[-30:]
-        w52h = q.get("w52h") or (max(hist) if hist else None)
-        w52l = q.get("w52l") or (min(hist) if hist else None)
+        rec = q.get("rec")
+        label, _cls, score = _rating_label(rec)
+        rsi = q.get("rsi")
+        reasons = [
+            f"Ø-Linien: {_rec_word(q.get('recMA'))}",
+            f"Oszillatoren: {_rec_word(q.get('recOther'))}",
+        ]
+        if isinstance(rsi, (int, float)):
+            reasons.append(f"RSI {rsi:.0f}")
+        rv = rec if isinstance(rec, (int, float)) else 0.0
+        trend = "Aufwärts" if rv >= 0.1 else "Abwärts" if rv <= -0.1 else "Seitwärts"
         out.append(
             {
                 "name": name,
                 "symbol": sym,
-                "last": last,
+                "last": q["last"],
                 "pct": q["pct"],
-                "p5": p5,    # ca. 1 Woche
-                "p20": p20,  # ca. 1 Monat
+                "p5": q.get("perfW"),   # 1-Wochen-Performance (TradingView)
+                "p20": q.get("perf1M"),  # 1-Monats-Performance (TradingView)
                 "trend": trend,
-                "score": ea["score"],
-                "signal": ea["signal"],
-                "rsi": ea["rsi"],
-                "reasons": ea["reasons"],
-                "hist": spark,
-                "w52h": w52h,
-                "w52l": w52l,
-                "vol": _volatility(hist[-60:] if len(hist) >= 60 else hist),
+                "score": score,
+                "signal": label,
+                "rsi": rsi,
+                "reasons": reasons,
+                "hist": [],  # ohne Kurshistorie keine Sparkline
+                "w52h": q.get("w52h"),
+                "w52l": q.get("w52l"),
+                "vol": q.get("vol"),
                 "sector": SECTORS.get(name, "Sonstige"),
                 "currency": q.get("currency", ""),
             }
         )
-    print(f"- Watchlist: {len(out)} Kurse, {sum(1 for r in out if r['hist'])} mit Verlauf")
+    print(f"- Watchlist: {len(out)} Werte")
     return out
 
 
@@ -956,16 +879,18 @@ def render_ea(rows: list[dict]) -> str:
     if not rows:
         return '<p class="empty">Keine Kursdaten für die Signalberechnung.</p>'
 
-    buy = sorted((r for r in rows if r["signal"] == "Kaufen"), key=lambda r: -r["score"])
-    sell = sorted((r for r in rows if r["signal"] == "Verkaufen"), key=lambda r: r["score"])
-    hold = [r for r in rows if r["signal"] == "Halten"]
+    def sig_cls(sig: str) -> str:
+        return "buy" if "Kaufen" in sig else "sell" if "Verkaufen" in sig else "hold"
+
+    buy = sorted((r for r in rows if "Kaufen" in r["signal"]), key=lambda r: -r["score"])
+    sell = sorted((r for r in rows if "Verkaufen" in r["signal"]), key=lambda r: r["score"])
+    hold = [r for r in rows if sig_cls(r["signal"]) == "hold"]
 
     def badge(sig: str) -> str:
-        cls = {"Kaufen": "buy", "Verkaufen": "sell"}.get(sig, "hold")
-        return f'<span class="sig {cls}">{e(sig)}</span>'
+        return f'<span class="sig {sig_cls(sig)}">{e(sig)}</span>'
 
     def card(r: dict) -> str:
-        cls = {"Kaufen": "buy", "Verkaufen": "sell"}.get(r["signal"], "hold")
+        cls = sig_cls(r["signal"])
         reasons = " · ".join(r.get("reasons", [])) or "neutrale Lage"
         rsi, vol = r.get("rsi"), r.get("vol")
         metrics = []
@@ -1037,19 +962,19 @@ def render_ea(rows: list[dict]) -> str:
     )
     return (
         '<section class="analysis"><h2>Signal-Radar</h2>'
-        f'<p class="asub">Regelbasiertes technisches Modell · {len(rows)} Werte · '
+        f'<p class="asub">Offizielles TradingView-Rating · {len(rows)} Werte · '
         'keine Anlageberatung</p>'
         f'{summary}'
         f'{group("📈 Kaufenswert", buy, "buy")}'
         f'{group("⚖️ Halten / Abwarten", hold, "hold")}'
         f'{group("📉 Eher verkaufen", sell, "sell")}'
-        '<details class="eamethod"><summary>Wie wird das berechnet?</summary>'
-        '<p>Pro Aktie werden fünf Faktoren bewertet (je +1 bullish / −1 bearish): '
-        'Kurs über/unter dem 20-Tage-Schnitt, 1-Wochen-Momentum, 1-Monats-Momentum, '
-        'Kreuzung des 5- vs. 20-Tage-Schnitts sowie RSI(14). Die Summe ergibt den '
-        'Score: ≥ +2 → Kaufenswert, ≤ −2 → Eher verkaufen, dazwischen → Halten. '
-        'Rein mechanisch aus Kursdaten berechnet – ein technisches Hilfsmittel, '
-        'kein Werturteil und keine Anlageberatung.</p></details>'
+        '<details class="eamethod"><summary>Wie kommt die Bewertung zustande?</summary>'
+        '<p>Grundlage ist das <b>technische Rating von TradingView</b>: Es fasst rund '
+        '26 gängige Indikatoren zusammen – gleitende Durchschnitte (Ø-Linien) und '
+        'Oszillatoren (u. a. RSI, MACD, Stochastik) – zu einer Gesamtnote von '
+        '„Stark verkaufen" bis „Stark kaufen". Der Score (−5 bis +5) spiegelt diese '
+        'Note wider. Ein technisches Hilfsmittel, kein Werturteil und keine '
+        'Anlageberatung.</p></details>'
         f"{table}</section>"
     )
 
@@ -1456,10 +1381,10 @@ def main() -> None:
     print(f"== Finanz-Digest, {now:%Y-%m-%d %H:%M} ==")
 
     news = gather_news()
-    quotes, series = fetch_market_data()
-    ticker = gather_ticker(quotes)
-    board = gather_board(quotes)
-    watchlist = gather_watchlist(quotes, series)
+    data = fetch_market_data()
+    ticker = gather_ticker(data)
+    board = gather_board(data)
+    watchlist = gather_watchlist(data)
 
     digest = digest_without_ai(news)
     if args.ai:
