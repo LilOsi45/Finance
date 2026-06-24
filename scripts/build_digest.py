@@ -111,6 +111,10 @@ TABS: dict[str, dict] = {
         "title": "Meine Watchlist",
         "feeds": [_watchlist_query()],
     },
+    "ea": {
+        "title": "Signal-Radar (EA)",
+        "feeds": [],  # rein berechnet, keine Nachrichten
+    },
     "maerkte": {
         "title": "Aktien & Märkte",
         "feeds": [
@@ -387,6 +391,61 @@ def gather_board() -> dict[str, list[dict]]:
     return board
 
 
+def _sma(closes: list[float], n: int) -> float | None:
+    return sum(closes[-n:]) / n if len(closes) >= n else None
+
+
+def _rsi(closes: list[float], period: int = 14) -> float | None:
+    """Relative-Strength-Index (klassisch, einfache Mittelung)."""
+    if len(closes) < period + 1:
+        return None
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))][-period:]
+    gain = sum(d for d in deltas if d > 0) / period
+    loss = sum(-d for d in deltas if d < 0) / period
+    if loss == 0:
+        return 100.0
+    rs = gain / loss
+    return 100 - 100 / (1 + rs)
+
+
+def _ea_score(last: float, hist: list[float], p5, p20) -> dict:
+    """Transparentes, regelbasiertes Signal aus 5 technischen Faktoren."""
+    score = 0
+    reasons: list[str] = []
+    sma20 = _sma(hist, 20) or (sum(hist) / len(hist) if hist else None)
+    sma5 = _sma(hist, 5)
+    rsi = _rsi(hist)
+
+    if sma20:
+        if last > sma20:
+            score += 1; reasons.append("über 20-Tage-Schnitt")
+        elif last < sma20:
+            score -= 1; reasons.append("unter 20-Tage-Schnitt")
+    if p5 is not None:
+        if p5 > 2:
+            score += 1; reasons.append("starkes Wochen-Momentum")
+        elif p5 < -2:
+            score -= 1; reasons.append("schwaches Wochen-Momentum")
+    if p20 is not None:
+        if p20 > 3:
+            score += 1; reasons.append("positiver Monatstrend")
+        elif p20 < -3:
+            score -= 1; reasons.append("negativer Monatstrend")
+    if sma5 and sma20:
+        if sma5 > sma20:
+            score += 1; reasons.append("kurzfr. Schnitt über langfr.")
+        elif sma5 < sma20:
+            score -= 1; reasons.append("kurzfr. Schnitt unter langfr.")
+    if rsi is not None:
+        if rsi < 30:
+            score += 1; reasons.append(f"überverkauft (RSI {rsi:.0f})")
+        elif rsi > 70:
+            score -= 1; reasons.append(f"überkauft (RSI {rsi:.0f})")
+
+    signal = "Kaufen" if score >= 2 else "Verkaufen" if score <= -2 else "Halten"
+    return {"score": score, "signal": signal, "rsi": rsi, "reasons": reasons}
+
+
 def gather_watchlist() -> list[dict]:
     print("- Lade Watchlist-Kurse …")
     out = []
@@ -411,15 +470,21 @@ def gather_watchlist() -> list[dict]:
                 trend = "Abwärts"
             else:
                 trend = "Seitwärts"
+        p5, p20 = perf(5), perf(20)
+        ea = _ea_score(last, hist, p5, p20)
         out.append(
             {
                 "name": name,
                 "symbol": sym,
                 "last": last,
                 "pct": q["pct"],
-                "p5": perf(5),    # ca. 1 Woche
-                "p20": perf(20),  # ca. 1 Monat
+                "p5": p5,    # ca. 1 Woche
+                "p20": p20,  # ca. 1 Monat
                 "trend": trend,
+                "score": ea["score"],
+                "signal": ea["signal"],
+                "rsi": ea["rsi"],
+                "reasons": ea["reasons"],
             }
         )
     print(f"    {len(out)} Kurse")
@@ -741,6 +806,81 @@ def render_analysis(rows: list[dict], ai_text: str = "", ai_stand: str = "") -> 
     )
 
 
+def render_ea(rows: list[dict]) -> str:
+    """Systematischer Signal-Reiter: Kaufen / Halten / Verkaufen (regelbasiert)."""
+    e = html.escape
+    if not rows:
+        return '<p class="empty">Keine Kursdaten für die Signalberechnung.</p>'
+
+    buy = sorted((r for r in rows if r["signal"] == "Kaufen"), key=lambda r: -r["score"])
+    sell = sorted((r for r in rows if r["signal"] == "Verkaufen"), key=lambda r: r["score"])
+    hold = [r for r in rows if r["signal"] == "Halten"]
+
+    def badge(sig: str) -> str:
+        cls = {"Kaufen": "buy", "Verkaufen": "sell"}.get(sig, "hold")
+        return f'<span class="sig {cls}">{e(sig)}</span>'
+
+    def card(r: dict) -> str:
+        cls = {"Kaufen": "buy", "Verkaufen": "sell"}.get(r["signal"], "hold")
+        reasons = " · ".join(r.get("reasons", [])) or "neutrale Lage"
+        return (
+            f'<a class="eacard {cls}" href="{e(_quote_link(r.get("symbol", "")))}" '
+            f'target="_blank" rel="noopener noreferrer">'
+            f'<div class="eatop"><span class="eaname">{e(r["name"])}</span>{badge(r["signal"])}</div>'
+            f'<div class="eareason">{e(reasons)}</div></a>'
+        )
+
+    def group(title: str, items: list[dict], cls: str) -> str:
+        if not items:
+            return ""
+        return (
+            f'<h3 class="eahead {cls}">{title} ({len(items)})</h3>'
+            f'<div class="eagrid">{"".join(card(r) for r in items)}</div>'
+        )
+
+    def cell(v) -> str:
+        if v is None:
+            return '<td class="na">–</td>'
+        c = "up" if v >= 0 else "down"
+        s = "+" if v >= 0 else ""
+        return f'<td class="{c}">{s}{v:.1f}%</td>'
+
+    trs = []
+    for r in sorted(rows, key=lambda x: -x["score"]):
+        rsi = r.get("rsi")
+        rsi_td = f"<td>{rsi:.0f}</td>" if rsi is not None else '<td class="na">–</td>'
+        nm = (
+            f'<a class="nmlink" href="{e(_quote_link(r.get("symbol", "")))}" '
+            f'target="_blank" rel="noopener noreferrer">{e(r["name"])}</a>'
+        )
+        trs.append(
+            f'<tr><td class="nm">{nm}</td><td>{badge(r["signal"])}</td>'
+            f'<td>{r["score"]:+d}</td>{rsi_td}{cell(r.get("p5"))}{cell(r.get("p20"))}</tr>'
+        )
+    table = (
+        "<table class='atable eatable'><thead><tr><th>Aktie</th><th>Signal</th>"
+        "<th>Score</th><th>RSI</th><th>1 Wo</th><th>1 Mon</th></tr></thead><tbody>"
+        + "".join(trs)
+        + "</tbody></table>"
+    )
+    return (
+        '<section class="analysis"><h2>Signal-Radar</h2>'
+        f'<p class="asub">Regelbasiertes technisches Modell · {len(rows)} Werte · '
+        'keine Anlageberatung</p>'
+        f'{group("📈 Kaufenswert", buy, "buy")}'
+        f'{group("⚖️ Halten / Abwarten", hold, "hold")}'
+        f'{group("📉 Eher verkaufen", sell, "sell")}'
+        '<details class="eamethod"><summary>Wie wird das berechnet?</summary>'
+        '<p>Pro Aktie werden fünf Faktoren bewertet (je +1 bullish / −1 bearish): '
+        'Kurs über/unter dem 20-Tage-Schnitt, 1-Wochen-Momentum, 1-Monats-Momentum, '
+        'Kreuzung des 5- vs. 20-Tage-Schnitts sowie RSI(14). Die Summe ergibt den '
+        'Score: ≥ +2 → Kaufenswert, ≤ −2 → Eher verkaufen, dazwischen → Halten. '
+        'Rein mechanisch aus Kursdaten berechnet – ein technisches Hilfsmittel, '
+        'kein Werturteil und keine Anlageberatung.</p></details>'
+        f"{table}</section>"
+    )
+
+
 def render_watchlist(quotes: list[dict]) -> str:
     """Flaches Kurs-Grid für den Watchlist-Reiter, sortiert nach Tagesgewinn."""
     e = html.escape
@@ -840,6 +980,9 @@ def render_html(
         extra = ""
         if tid == "extras":
             extra = board_html
+        elif tid == "ea":
+            extra = render_ea(watchlist)
+            cards_html = ""  # EA-Reiter zeigt keine Nachrichten
         elif tid == "watchlist":
             extra = render_analysis(
                 watchlist, digest.get("expert", ""), digest.get("expert_stand", "")
@@ -994,6 +1137,29 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
             color:#c7d2e2; font-size:.92rem; line-height:1.7; }}
   .aikom b {{ color:var(--gold-bright); font-weight:600; }}
   .aistand {{ color:var(--muted2); font-size:.78em; }}
+
+  .sig {{ font-size:.7rem; font-weight:700; padding:3px 10px; border-radius:999px;
+          letter-spacing:.03em; white-space:nowrap; }}
+  .sig.buy {{ background:rgba(92,192,142,.14); color:var(--up); border:1px solid var(--up); }}
+  .sig.sell {{ background:rgba(224,121,109,.14); color:var(--down); border:1px solid var(--down); }}
+  .sig.hold {{ background:rgba(142,165,192,.12); color:var(--muted); border:1px solid var(--line); }}
+  .eahead {{ font-size:.78rem; text-transform:uppercase; letter-spacing:.08em; margin:20px 0 10px; }}
+  .eahead.buy {{ color:var(--up); }} .eahead.sell {{ color:var(--down); }} .eahead.hold {{ color:var(--muted); }}
+  .eagrid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; }}
+  .eacard {{ display:block; text-decoration:none; color:inherit; background:var(--card);
+             border:1px solid var(--line); border-left:3px solid var(--line2,var(--line));
+             border-radius:12px; padding:12px 14px; transition:.2s; }}
+  .eacard.buy {{ border-left-color:var(--up); }}
+  .eacard.sell {{ border-left-color:var(--down); }}
+  .eacard.hold {{ border-left-color:var(--muted2); }}
+  .eacard:hover {{ border-color:var(--gold); }}
+  .eatop {{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; }}
+  .eaname {{ font-weight:600; }}
+  .eareason {{ font-size:.78rem; color:var(--muted); }}
+  .eamethod {{ margin:18px 0 6px; color:var(--muted); font-size:.82rem; }}
+  .eamethod summary {{ cursor:pointer; color:var(--gold); }}
+  .eatable {{ margin-top:8px; }}
+  .eatable td {{ font-variant-numeric:tabular-nums; }}
 
   .archiv {{ display:inline-block; margin-top:30px; color:var(--gold); text-decoration:none;
              font-size:.8rem; letter-spacing:.04em; }}
