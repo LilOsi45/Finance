@@ -188,6 +188,18 @@ def _domain(url: str) -> str:
     return urlparse(url).netloc.replace("www.", "")
 
 
+def _safe_url(url: str) -> str:
+    """Nur http/https zulassen. Verhindert javascript:/data:-Links aus Feeds
+    (XSS-Schutz). Unsichere/leere URLs ergeben einen leeren String."""
+    from urllib.parse import urlparse
+    try:
+        if urlparse(url).scheme.lower() in ("http", "https"):
+            return url
+    except Exception:
+        pass
+    return ""
+
+
 def fetch_feed(url: str) -> list[dict]:
     """Lädt einen Feed robust; gibt bei Fehler eine leere Liste zurück."""
     try:
@@ -533,10 +545,16 @@ def render_html(
         cards = []
         for it in tab.get("items", []):
             insight = f'<p>{e(it["insight"])}</p>' if it.get("insight") else ""
+            safe = _safe_url(it.get("url", ""))
+            if safe:
+                title_html = (
+                    f'<a class="hl" href="{e(safe)}" target="_blank" '
+                    f'rel="noopener noreferrer">{e(it["headline"])}</a>'
+                )
+            else:  # unsicheres/leeres Link-Schema -> kein anklickbarer Link
+                title_html = f'<span class="hl">{e(it["headline"])}</span>'
             cards.append(
-                f'<article class="card">'
-                f'<a class="hl" href="{e(it["url"])}" target="_blank" rel="noopener">'
-                f'{e(it["headline"])}</a>{insight}'
+                f'<article class="card">{title_html}{insight}'
                 f'<span class="src">{e(it.get("source", ""))}</span></article>'
             )
         cards_html = "".join(cards) or '<p class="empty">Heute keine Meldungen.</p>'
@@ -566,6 +584,8 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<!-- Offener Tab aktualisiert sich automatisch alle 30 Minuten. -->
+<meta http-equiv="refresh" content="1800">
 <title>Mein Finanz-Briefing</title>
 <style>
   * {{ box-sizing:border-box; }}
@@ -625,7 +645,7 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <div class="wrap">
   <header>
     <h1>☕ Mein Finanz-Briefing</h1>
-    <div class="datum">{datum}</div>
+    <div class="datum">Stand: {datum} · aktualisiert sich automatisch</div>
   </header>
   <div class="ticker">{ticker}</div>
   {briefing}

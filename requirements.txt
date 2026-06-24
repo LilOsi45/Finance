@@ -1,3 +1,7 @@
-anthropic>=0.40
-feedparser>=6.0
-requests>=2.31
+# Versionsbereiche mit Obergrenze: Sicherheits-/Bugfix-Updates ja,
+# überraschende Major-Versionen (mögliche Breaking Changes / Supply-Chain)
+# nein. Für maximale Reproduzierbarkeit könntest du exakt pinnen (==) und
+# Hashes hinterlegen.
+anthropic>=0.40,<1.0
+feedparser>=6.0,<7.0
+requests>=2.31,<3.0

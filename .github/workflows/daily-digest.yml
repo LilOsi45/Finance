@@ -2,9 +2,10 @@ name: Täglicher Finanz-Digest
 
 on:
   schedule:
-    # 05:30 UTC ≈ 07:30 MEZ / 07:30 MESZ. GitHub-Cron kann sich um einige
-    # Minuten verzögern – das ist normal.
-    - cron: "30 5 * * *"
+    # Stündlich von 04:00 bis 21:00 UTC = ca. 06:00–23:00 deutscher Zeit.
+    # So ist der Digest egal ob du um 6:00 oder 13:00 draufschaust frisch.
+    # GitHub-Cron kann sich um einige Minuten verzögern – das ist normal.
+    - cron: "0 4-21 * * *"
   workflow_dispatch: {}  # erlaubt manuelles Auslösen per Knopfdruck
 
 permissions:
@@ -45,6 +46,6 @@ jobs:
           if git diff --quiet --cached; then
             echo "Keine Änderungen."
           else
-            git commit -m "Digest: $(date -u +%Y-%m-%d)"
+            git commit -m "Digest: $(date -u +'%Y-%m-%d %H:%M') UTC"
             git push
           fi
