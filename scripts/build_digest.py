@@ -397,20 +397,25 @@ def tv_scan(internal_syms) -> dict[str, dict]:
             rec = dict(zip(TV_COLUMNS, d))
             if rec.get("close") is None:
                 continue
+
+            def _f(key):  # nur echte Zahlen zulassen, sonst None
+                v = rec.get(key)
+                return float(v) if isinstance(v, (int, float)) else None
+
             try:
                 out[internal] = {
                     "last": float(rec["close"]),
-                    "pct": float(rec.get("change") or 0),
-                    "perfW": rec.get("Perf.W"),
-                    "perf1M": rec.get("Perf.1M"),
-                    "rsi": rec.get("RSI"),
-                    "rec": rec.get("Recommend.All"),
-                    "recMA": rec.get("Recommend.MA"),
-                    "recOther": rec.get("Recommend.Other"),
-                    "w52h": rec.get("price_52_week_high"),
-                    "w52l": rec.get("price_52_week_low"),
-                    "vol": rec.get("Volatility.D"),
-                    "currency": rec.get("currency", ""),
+                    "pct": _f("change") or 0.0,
+                    "perfW": _f("Perf.W"),
+                    "perf1M": _f("Perf.1M"),
+                    "rsi": _f("RSI"),
+                    "rec": _f("Recommend.All"),
+                    "recMA": _f("Recommend.MA"),
+                    "recOther": _f("Recommend.Other"),
+                    "w52h": _f("price_52_week_high"),
+                    "w52l": _f("price_52_week_low"),
+                    "vol": _f("Volatility.D"),
+                    "currency": "",  # nicht angezeigt; vermeidet Fremdstrings im HTML
                 }
             except (TypeError, ValueError):
                 continue
@@ -810,10 +815,9 @@ def render_analysis(rows: list[dict], ai_text: str = "", ai_stand: str = "") -> 
             f'<td class="trend {tcls}">{e(r["trend"])}</td></tr>'
         )
     table = (
-        "<table class='atable'><thead><tr><th>Wert</th><th>1 Tag</th>"
-        "<th>1 Woche</th><th>1 Monat</th><th>Trend</th></tr></thead><tbody>"
-        + "".join(trs)
-        + "</tbody></table>"
+        "<div class='tablewrap'><table class='atable'><thead><tr><th>Wert</th>"
+        "<th>1 Tag</th><th>1 Woche</th><th>1 Monat</th><th>Trend</th></tr></thead>"
+        "<tbody>" + "".join(trs) + "</tbody></table></div>"
     )
     stand_part = f' <span class="aistand">(Stand {e(ai_stand)})</span>' if ai_stand else ""
     ai_block = (
@@ -943,10 +947,10 @@ def render_ea(rows: list[dict]) -> str:
             f'<td>{r["score"]:+d}</td>{rsi_td}{cell(r.get("p5"))}{cell(r.get("p20"))}</tr>'
         )
     table = (
-        "<table class='atable eatable'><thead><tr><th>Aktie</th><th>Signal</th>"
-        "<th>Score</th><th>RSI</th><th>1 Wo</th><th>1 Mon</th></tr></thead><tbody>"
-        + "".join(trs)
-        + "</tbody></table>"
+        "<div class='tablewrap'><table class='atable eatable'><thead><tr>"
+        "<th>Aktie</th><th>Signal</th><th>Score</th><th>RSI</th>"
+        "<th>1 Wo</th><th>1 Mon</th></tr></thead><tbody>"
+        + "".join(trs) + "</tbody></table></div>"
     )
     avg = sum(r["score"] for r in rows) / len(rows)
     regime = (
@@ -1219,15 +1223,15 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .achip {{ font-size:.8rem; font-weight:600; padding:4px 11px; border-radius:999px;
             border:1px solid var(--line); font-variant-numeric:tabular-nums; }}
   .achip.up {{ color:var(--up); }} .achip.down {{ color:var(--down); }}
-  .atable {{ width:100%; border-collapse:collapse; margin-top:16px; table-layout:fixed;
+  .tablewrap {{ overflow-x:auto; -webkit-overflow-scrolling:touch; margin-top:16px; }}
+  .atable {{ width:100%; border-collapse:collapse; white-space:nowrap;
              font-size:.85rem; font-variant-numeric:tabular-nums; }}
-  .atable td.nm {{ overflow-wrap:anywhere; }}
   .atable th {{ text-align:right; font-weight:500; color:var(--muted2);
                font-size:.68rem; text-transform:uppercase; letter-spacing:.06em;
-               padding:6px 8px; border-bottom:1px solid var(--line); }}
+               padding:6px 10px; border-bottom:1px solid var(--line); }}
   .atable th:first-child {{ text-align:left; }}
-  .atable td {{ text-align:right; padding:9px 8px; border-bottom:1px solid var(--line-soft); }}
-  .atable td.nm {{ text-align:left; color:var(--text); }}
+  .atable td {{ text-align:right; padding:9px 10px; border-bottom:1px solid var(--line-soft); }}
+  .atable td.nm {{ text-align:left; color:var(--text); padding-right:16px; }}
   .atable td.up {{ color:var(--up); }} .atable td.down {{ color:var(--down); }}
   .atable td.na {{ color:var(--muted2); }}
   .atable td.trend {{ font-size:.78rem; }}
