@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Mein Finanz-Briefing</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --line:#2a2e38; --txt:#e8eaed;
+           --muted:#9aa0aa; --acc:#e0a96d; --up:#4caf50; --down:#ef5350; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#0f1115; color:#e8eaed;
+          font-family:Georgia,'Times New Roman',serif; line-height:1.5; }
+  .wrap { max-width:860px; margin:0 auto; padding:20px 16px 60px; }
+  header h1 { font-size:1.7rem; margin:0 0 2px; }
+  .datum { color:#9aa0aa; font-size:.9rem; margin-bottom:14px; }
+  .ticker { display:flex; flex-wrap:wrap; gap:14px; padding:10px 12px;
+             background:#1a1d24; border:1px solid #2a2e38; border-radius:10px;
+             font-family:system-ui,sans-serif; font-size:.85rem; margin-bottom:22px; }
+  .tick b { font-weight:600; }
+  .tick i { font-style:normal; font-weight:600; }
+  .tick.up i { color:#4caf50; }
+  .tick.down i { color:#ef5350; }
+  .briefing { background:#1a1d24; border:1px solid #2a2e38; border-left:3px solid #e0a96d;
+               border-radius:10px; padding:14px 18px; margin-bottom:24px; }
+  .briefing h2 { margin:0 0 8px; font-size:1.15rem; }
+  .briefing ul { margin:0; padding-left:20px; }
+  .briefing li { margin:5px 0; }
+  .tabs { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:18px; }
+  .tabbtn { background:#1a1d24; color:#9aa0aa; border:1px solid #2a2e38;
+             padding:8px 14px; border-radius:20px; cursor:pointer;
+             font-family:system-ui,sans-serif; font-size:.85rem; }
+  .tabbtn.active { background:#e0a96d; color:#15171c; border-color:#e0a96d; font-weight:600; }
+  .panel { display:none; }
+  .panel.active { display:block; }
+  .tabsummary { color:#c9cdd4; font-style:italic; margin:0 0 16px; }
+  .card { background:#1a1d24; border:1px solid #2a2e38; border-radius:10px;
+           padding:14px 16px; margin-bottom:12px; }
+  .card .hl { color:#e8eaed; font-weight:600; text-decoration:none; font-size:1.05rem; }
+  .card .hl:hover { color:#e0a96d; }
+  .card p { margin:6px 0; color:#c9cdd4; font-size:.95rem; }
+  .card .src { color:#9aa0aa; font-size:.78rem; font-family:system-ui,sans-serif; }
+  .empty { color:#9aa0aa; }
+  .archiv { display:inline-block; margin-top:18px; color:#e0a96d;
+             font-family:system-ui,sans-serif; font-size:.85rem; }
+  footer { margin-top:30px; color:#6b7280; font-size:.75rem;
+            font-family:system-ui,sans-serif; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>☕ Mein Finanz-Briefing</h1>
+    <div class="datum">Wednesday, 24. June 2026 · 08:44 Uhr</div>
+  </header>
+  <div class="ticker"><span class="tick">Keine Kursdaten</span></div>
+  
+  <div class="tabs"><button class="tabbtn active" data-tab="maerkte">Aktien &amp; Märkte</button><button class="tabbtn" data-tab="management">International Management &amp; Unternehmen</button><button class="tabbtn" data-tab="welt">Weltnachrichten &amp; Geopolitik</button><button class="tabbtn" data-tab="dach_krypto">DACH &amp; Krypto</button></div>
+  <div class="panel active" id="panel-maerkte"><p class="empty">Heute keine Meldungen.</p></div><div class="panel" id="panel-management"><p class="empty">Heute keine Meldungen.</p></div><div class="panel" id="panel-welt"><p class="empty">Heute keine Meldungen.</p></div><div class="panel" id="panel-dach_krypto"><p class="empty">Heute keine Meldungen.</p></div>
+  <a class="archiv" href="archiv/">Archiv ältere Tage →</a>
+  <footer>Privat erstellt aus öffentlichen Quellen · automatisch generiert.</footer>
+</div>
+<script>
+  document.querySelectorAll('.tabbtn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.tabbtn').forEach(function (b) { b.classList.remove('active'); });
+      document.querySelectorAll('.panel').forEach(function (p) { p.classList.remove('active'); });
+      btn.classList.add('active');
+      document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>
