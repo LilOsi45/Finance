@@ -543,10 +543,12 @@ def expert_commentary(watchlist: list[dict], news: dict[str, list[dict]]) -> str
     headlines = [it["headline"] for it in news.get("watchlist", [])][:12]
     sys_prompt = (
         "Du bist erfahrener Aktien-Analyst einer Privatbank und schreibst auf "
-        "Deutsch eine kurze, sachliche Einordnung (4–6 Sätze) zur Watchlist des "
-        "Kunden. Stütze dich nur auf die gelieferten Kennzahlen und Schlagzeilen. "
-        "Nenne konkrete Chancen UND Risiken. Erfinde KEINE Kursziele und KEINE "
-        "Renditeversprechen. Kein Marketing, kein Hype – nüchtern und hochwertig."
+        "Deutsch eine sachliche Einordnung (6–8 Sätze) zur Watchlist des Kunden. "
+        "Stütze dich nur auf die gelieferten Kennzahlen und Schlagzeilen. Nenne "
+        "konkrete Chancen UND Risiken. Erfinde KEINE Kursziele und KEINE "
+        "Renditeversprechen. Kein Marketing, kein Hype – nüchtern und hochwertig. "
+        "Schreibe reinen Fließtext: KEIN Markdown, KEINE Sternchen, KEINE "
+        "Überschrift – beginne direkt mit der Einordnung."
     )
     user_msg = (
         "Kennzahlen (pct=heute, p5=1 Woche, p20=1 Monat, jeweils %):\n"
@@ -558,11 +560,14 @@ def expert_commentary(watchlist: list[dict], news: dict[str, list[dict]]) -> str
         print(f"- Erstelle Experten-Kommentar ({MODEL}) …")
         resp = client.messages.create(
             model=MODEL,
-            max_tokens=600,
+            max_tokens=1200,
             system=sys_prompt,
             messages=[{"role": "user", "content": user_msg}],
         )
-        return next((b.text for b in resp.content if b.type == "text"), "").strip()
+        text = next((b.text for b in resp.content if b.type == "text"), "").strip()
+        # Sicherheitsnetz: etwaiges Markdown entfernen (Sternchen/Rauten).
+        text = text.replace("**", "").replace("##", "").replace("__", "")
+        return text.strip()
     except Exception as exc:
         print(f"  ! Experten-Kommentar fehlgeschlagen: {exc}", file=sys.stderr)
         return ""
