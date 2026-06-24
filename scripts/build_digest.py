@@ -200,6 +200,39 @@ def _safe_url(url: str) -> str:
     return ""
 
 
+def _entry_image(entry) -> str:
+    """Bestes Vorschaubild eines Feed-Eintrags finden (https), sonst ""."""
+    cands: list[str] = []
+    for key in ("media_content", "media_thumbnail"):
+        media = entry.get(key)
+        if media:
+            cands.append((media[0] or {}).get("url", ""))
+    for enc in entry.get("enclosures", []) or []:
+        if "image" in (enc.get("type", "")) or enc.get("href", "").lower().endswith(
+            (".jpg", ".jpeg", ".png", ".webp")
+        ):
+            cands.append(enc.get("href", ""))
+    blob = entry.get("summary", "")
+    for c in entry.get("content", []) or []:
+        blob += c.get("value", "")
+    import re
+    m = re.search(r'<img[^>]+src=["\']([^"\']+)', blob)
+    if m:
+        cands.append(m.group(1))
+    for u in cands:
+        if u and u.startswith("https://"):  # http würde auf https-Seite blockiert
+            return u
+    return ""
+
+
+def _favicon(entry, link: str) -> str:
+    """Logo/Favicon der echten Quelle (Google News liefert die Publisher-URL)."""
+    src = entry.get("source")
+    href = src.get("href", "") if isinstance(src, dict) else ""
+    dom = _domain(href) if href else _domain(link)
+    return f"https://www.google.com/s2/favicons?sz=64&domain={dom}" if dom else ""
+
+
 def fetch_feed(url: str) -> list[dict]:
     """Lädt einen Feed robust; gibt bei Fehler eine leere Liste zurück."""
     try:
@@ -228,6 +261,8 @@ def fetch_feed(url: str) -> list[dict]:
                 "url": link,
                 "source": source or _domain(link),
                 "snippet": summary,
+                "image": _entry_image(e),
+                "favicon": _favicon(e, link),
                 "ts": ts.isoformat() if ts else "",
             }
         )
@@ -350,6 +385,8 @@ def digest_without_ai(news: dict[str, list[dict]]) -> dict:
                     "insight": it["snippet"],
                     "source": it["source"],
                     "url": it["url"],
+                    "image": it.get("image", ""),
+                    "favicon": it.get("favicon", ""),
                 }
                 for it in news.get(tid, [])
             ],
@@ -455,9 +492,10 @@ def summarize_with_claude(news: dict[str, list[dict]], ticker: list[dict]) -> di
 def _quote_span(q: dict) -> str:
     cls = "up" if q["pct"] >= 0 else "down"
     sign = "+" if q["pct"] >= 0 else ""
+    arr = "▲" if q["pct"] >= 0 else "▼"
     return (
         f'<span class="tick {cls}"><b>{html.escape(q["name"])}</b> '
-        f'{fmt_price(q["last"])} <i>{sign}{q["pct"]:.2f}%</i></span>'
+        f'{fmt_price(q["last"])} <i><span class="arr">{arr}</span> {sign}{q["pct"]:.2f}%</i></span>'
     )
 
 
@@ -483,10 +521,11 @@ def render_board(board: dict[str, list[dict]]) -> str:
         for q in rows:
             cls = "up" if q["pct"] >= 0 else "down"
             sign = "+" if q["pct"] >= 0 else ""
+            arr = "▲" if q["pct"] >= 0 else "▼"
             cells.append(
                 f'<div class="bcell {cls}"><span class="bname">{e(q["name"])}</span>'
                 f'<span class="bval">{fmt_price(q["last"])}</span>'
-                f'<span class="bpct">{sign}{q["pct"]:.2f}%</span></div>'
+                f'<span class="bpct"><span class="arr">{arr}</span> {sign}{q["pct"]:.2f}%</span></div>'
             )
         sections.append(
             f'<h3 class="bgroup">{e(group)}</h3><div class="board">{"".join(cells)}</div>'
@@ -510,10 +549,11 @@ def render_watchlist(quotes: list[dict]) -> str:
     for q in rows:
         cls = "up" if q["pct"] >= 0 else "down"
         sign = "+" if q["pct"] >= 0 else ""
+        arr = "▲" if q["pct"] >= 0 else "▼"
         cells.append(
             f'<div class="bcell {cls}"><span class="bname">{e(q["name"])}</span>'
             f'<span class="bval">{fmt_price(q["last"])}</span>'
-            f'<span class="bpct">{sign}{q["pct"]:.2f}%</span></div>'
+            f'<span class="bpct"><span class="arr">{arr}</span> {sign}{q["pct"]:.2f}%</span></div>'
         )
     return f'<section class="marketboard">{highlight}<div class="board">{"".join(cells)}</div></section>'
 
@@ -562,9 +602,23 @@ def render_html(
                 )
             else:  # unsicheres/leeres Link-Schema -> kein anklickbarer Link
                 title_html = f'<span class="hl">{e(it["headline"])}</span>'
+            img = it.get("image", "")
+            thumb = (
+                f'<img class="thumb" src="{e(img)}" loading="lazy" '
+                f'onerror="this.remove()" alt="">'
+                if img.startswith("https://")
+                else ""
+            )
+            fav = it.get("favicon", "")
+            favimg = (
+                f'<img class="fav" src="{e(fav)}" loading="lazy" '
+                f'onerror="this.remove()" alt="">'
+                if fav
+                else ""
+            )
             cards.append(
-                f'<article class="card">{title_html}{insight}'
-                f'<span class="src">{e(it.get("source", ""))}</span></article>'
+                f'<article class="card">{thumb}<div class="ctext">{title_html}{insight}'
+                f'<span class="src">{favimg}{e(it.get("source", ""))}</span></div></article>'
             )
         cards_html = "".join(cards) or '<p class="empty">Heute keine Meldungen.</p>'
         # Im Extras-Reiter das Markt-Board, im Watchlist-Reiter die Kurstafel oben.
@@ -599,14 +653,14 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@600;700&display=swap');
   :root {{
-    --bg:#0a0c10; --bg2:#0f1217; --card:#13171d; --line:#222831;
-    --line-soft:#1b2026; --text:#ece9e2; --muted:#8c93a0; --muted2:#6b7280;
-    --gold:#c8a86a; --gold-bright:#e6cd94; --up:#5cc08e; --down:#e0796d;
+    --bg:#0a0f18; --bg2:#0d1626; --card:#101b2e; --line:#1f3048;
+    --line-soft:#17243a; --text:#e9edf4; --muted:#8ea4c0; --muted2:#647488;
+    --gold:#5b9dd9; --gold-bright:#8ec5ff; --up:#4fc78a; --down:#e0796d;
   }}
   * {{ box-sizing:border-box; }}
   body {{ margin:0; color:var(--text); line-height:1.6;
           font-family:'Inter',system-ui,sans-serif; -webkit-font-smoothing:antialiased;
-          background:radial-gradient(1200px 520px at 50% -220px,#161b22 0%,transparent 70%),var(--bg); }}
+          background:radial-gradient(1200px 540px at 50% -220px,#16304f 0%,transparent 70%),var(--bg); }}
   .wrap {{ max-width:880px; margin:0 auto; padding:0 20px 80px; }}
   a {{ color:inherit; }}
 
@@ -666,13 +720,21 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .bcell.up .bpct {{ color:var(--up); }}
   .bcell.down .bpct {{ color:var(--down); }}
 
-  .card {{ border-bottom:1px solid var(--line-soft); padding:20px 2px; }}
+  .card {{ display:flex; gap:18px; border-bottom:1px solid var(--line-soft); padding:20px 2px; }}
   .card:first-of-type {{ padding-top:4px; }}
+  .ctext {{ flex:1; min-width:0; }}
+  .thumb {{ width:132px; height:99px; object-fit:cover; border-radius:12px; order:2;
+            border:1px solid var(--line); flex-shrink:0; background:var(--card); }}
   .card .hl {{ font-family:'Playfair Display',Georgia,serif; color:var(--text); font-weight:600;
                text-decoration:none; font-size:1.22rem; line-height:1.35; display:block; transition:.2s; }}
   a.hl:hover {{ color:var(--gold-bright); }}
-  .card p {{ margin:8px 0 10px; color:#b6bcc6; font-size:.95rem; }}
-  .card .src {{ color:var(--muted2); font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; }}
+  .card p {{ margin:8px 0 10px; color:#b9c3d4; font-size:.95rem; }}
+  .card .src {{ display:flex; align-items:center; gap:8px; color:var(--muted2);
+               font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; }}
+  .fav {{ width:18px; height:18px; border-radius:5px; flex-shrink:0;
+          background:var(--card); }}
+  .arr {{ font-size:.7em; }}
+  @media (max-width:560px) {{ .thumb {{ width:96px; height:74px; }} .card {{ gap:12px; }} }}
   .empty {{ color:var(--muted); text-align:center; padding:40px 0; font-style:italic; }}
 
   .archiv {{ display:inline-block; margin-top:30px; color:var(--gold); text-decoration:none;
