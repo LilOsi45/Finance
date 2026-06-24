@@ -6,8 +6,6 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Mein Finanz-Briefing</title>
 <style>
-  :root { --bg:#0f1115; --card:#1a1d24; --line:#2a2e38; --txt:#e8eaed;
-           --muted:#9aa0aa; --acc:#e0a96d; --up:#4caf50; --down:#ef5350; }
   * { box-sizing:border-box; }
   body { margin:0; background:#0f1115; color:#e8eaed;
           font-family:Georgia,'Times New Roman',serif; line-height:1.5; }
@@ -34,6 +32,20 @@
   .panel { display:none; }
   .panel.active { display:block; }
   .tabsummary { color:#c9cdd4; font-style:italic; margin:0 0 16px; }
+  .marketboard { margin-bottom:20px; }
+  .bhi { color:#e0a96d; font-family:system-ui,sans-serif; font-size:.9rem; margin:0 0 12px; }
+  .bgroup { font-size:.8rem; text-transform:uppercase; letter-spacing:.05em;
+             color:#9aa0aa; font-family:system-ui,sans-serif; margin:14px 0 6px; }
+  .board { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+            gap:8px; }
+  .bcell { background:#1a1d24; border:1px solid #2a2e38; border-radius:8px;
+            padding:8px 10px; display:flex; flex-direction:column;
+            font-family:system-ui,sans-serif; }
+  .bcell .bname { font-size:.78rem; color:#9aa0aa; }
+  .bcell .bval { font-size:1.05rem; font-weight:600; }
+  .bcell .bpct { font-size:.82rem; font-weight:600; }
+  .bcell.up .bpct { color:#4caf50; }
+  .bcell.down .bpct { color:#ef5350; }
   .card { background:#1a1d24; border:1px solid #2a2e38; border-radius:10px;
            padding:14px 16px; margin-bottom:12px; }
   .card .hl { color:#e8eaed; font-weight:600; text-decoration:none; font-size:1.05rem; }
@@ -51,12 +63,12 @@
 <div class="wrap">
   <header>
     <h1>☕ Mein Finanz-Briefing</h1>
-    <div class="datum">Wednesday, 24. June 2026 · 08:44 Uhr</div>
+    <div class="datum">Wednesday, 24. June 2026 · 08:49 Uhr</div>
   </header>
   <div class="ticker"><span class="tick">Keine Kursdaten</span></div>
   
-  <div class="tabs"><button class="tabbtn active" data-tab="maerkte">Aktien &amp; Märkte</button><button class="tabbtn" data-tab="management">International Management &amp; Unternehmen</button><button class="tabbtn" data-tab="welt">Weltnachrichten &amp; Geopolitik</button><button class="tabbtn" data-tab="dach_krypto">DACH &amp; Krypto</button></div>
-  <div class="panel active" id="panel-maerkte"><p class="empty">Heute keine Meldungen.</p></div><div class="panel" id="panel-management"><p class="empty">Heute keine Meldungen.</p></div><div class="panel" id="panel-welt"><p class="empty">Heute keine Meldungen.</p></div><div class="panel" id="panel-dach_krypto"><p class="empty">Heute keine Meldungen.</p></div>
+  <div class="tabs"><button class="tabbtn active" data-tab="maerkte">Aktien &amp; Märkte</button><button class="tabbtn" data-tab="wirtschaft">International Management &amp; Wirtschaft</button><button class="tabbtn" data-tab="welt">Weltnachrichten</button><button class="tabbtn" data-tab="extras">Markt-Board &amp; Krypto</button></div>
+  <div class="panel active" id="panel-maerkte"><p class="empty">Heute keine Meldungen.</p></div><div class="panel" id="panel-wirtschaft"><p class="empty">Heute keine Meldungen.</p></div><div class="panel" id="panel-welt"><p class="empty">Heute keine Meldungen.</p></div><div class="panel" id="panel-extras"><p class="empty">Keine Marktdaten verfügbar.</p><p class="empty">Heute keine Meldungen.</p></div>
   <a class="archiv" href="archiv/">Archiv ältere Tage →</a>
   <footer>Privat erstellt aus öffentlichen Quellen · automatisch generiert.</footer>
 </div>

@@ -3,16 +3,19 @@
 
 Ablauf:
   1. RSS-Feeds laden (letzte Stunden), pro Reiter gruppieren, deduplizieren.
-  2. Markt-Snapshot laden (Indizes + Krypto, kostenlos via Stooq, kein API-Key).
-  3. Claude fasst pro Reiter auf Deutsch zusammen (FT-Stil, mit Quellen-Links).
+  2. Markt-Snapshot + erweitertes Markt-Board laden (Indizes, Währungen,
+     Rohstoffe, Krypto – kostenlos via Stooq, kein API-Key nötig).
+  3. (Optional) Claude fasst pro Reiter zusammen. Standard ist OHNE KI:
+     saubere Aggregation der wichtigsten Schlagzeilen + Originalteaser.
   4. Ein eigenständiges HTML-Dashboard nach docs/ rendern (inkl. Tagesarchiv).
 
 Aufruf:
-  python scripts/build_digest.py            # mit KI (braucht ANTHROPIC_API_KEY)
-  python scripts/build_digest.py --no-ai    # ohne KI, nur Schlagzeilen (zum Testen)
+  python scripts/build_digest.py          # Standard: ohne KI, nur Schlagzeilen
+  python scripts/build_digest.py --ai     # mit Claude-Zusammenfassung
+                                          # (braucht ANTHROPIC_API_KEY)
 
-Konfiguration: siehe Block "KONFIGURATION" weiter unten – Quellen, Reiter,
-Markt-Symbole, Modell und Zeitfenster lassen sich dort leicht anpassen.
+Konfiguration: siehe Block "KONFIGURATION" – Quellen, Reiter, Markt-Symbole,
+Modell und Zeitfenster lassen sich dort leicht anpassen.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import feedparser
@@ -38,28 +42,24 @@ import requests
 # Nur Beiträge der letzten N Stunden aufnehmen.
 TIME_WINDOW_HOURS = 48
 
-# Höchstzahl Einträge, die pro Reiter an Claude übergeben werden.
+# Höchstzahl Einträge, die pro Reiter angezeigt (bzw. an Claude übergeben) werden.
 MAX_ITEMS_PER_TAB = 16
 
-# Modell für die Zusammenfassung. Default: bestes Modell (claude-opus-4-8).
-# Günstigere Alternativen (deutlich weniger Kosten pro Tag, etwas einfachere
-# Einordnung): "claude-sonnet-4-6" oder "claude-haiku-4-5".
+# Modell für die OPTIONALE KI-Zusammenfassung (nur mit --ai relevant).
+# Default: bestes Modell. Günstiger: "claude-sonnet-4-6" / "claude-haiku-4-5".
 MODEL = "claude-opus-4-8"
 
 # Zeitzone für Datum/Uhrzeit in der Anzeige.
 TZ = ZoneInfo("Europe/Berlin")
 
-# Reiter und ihre RSS-Quellen. Reihenfolge bestimmt die Reiter-Reihenfolge.
-# Google-News-Such-Feeds sind sehr zuverlässig und sprachlich filterbar.
+
 def _gnews(query: str) -> str:
-    from urllib.parse import quote
-    return (
-        "https://news.google.com/rss/search?q="
-        + quote(query)
-        + "&hl=de&gl=DE&ceid=DE:de"
-    )
+    """Google-News-Such-Feed (zuverlässig, sprachlich filterbar)."""
+    return "https://news.google.com/rss/search?q=" + quote(query) + "&hl=de&gl=DE&ceid=DE:de"
 
 
+# Reiter und ihre RSS-Quellen. Reihenfolge = Reiter-Reihenfolge.
+# Der Reiter "extras" zeigt zusätzlich oben das Markt-Board (s. MARKET_BOARD).
 TABS: dict[str, dict] = {
     "maerkte": {
         "title": "Aktien & Märkte",
@@ -71,40 +71,65 @@ TABS: dict[str, dict] = {
             _gnews("DAX OR S&P 500 OR Nasdaq Aktien Börse when:2d"),
         ],
     },
-    "management": {
-        "title": "International Management & Unternehmen",
+    "wirtschaft": {
+        "title": "International Management & Wirtschaft",
         "feeds": [
             "https://www.handelsblatt.com/contentexport/feed/unternehmen",
+            "https://www.nzz.ch/wirtschaft.rss",
             _gnews("Konzern OR Übernahme OR M&A OR CEO Strategie when:2d"),
-            _gnews("global supply chain OR world trade company when:2d"),
+            _gnews("global economy OR world trade OR central bank when:2d"),
         ],
     },
     "welt": {
-        "title": "Weltnachrichten & Geopolitik",
+        "title": "Weltnachrichten",
         "feeds": [
             "https://www.tagesschau.de/ausland/index~rss2.xml",
-            _gnews("Geopolitik OR Notenbank OR Konflikt Wirtschaft when:2d"),
+            _gnews("Geopolitik OR Konflikt OR Wahl Weltpolitik when:2d"),
         ],
     },
-    "dach_krypto": {
-        "title": "DACH & Krypto",
+    "extras": {
+        "title": "Markt-Board & Krypto",
         "feeds": [
-            "https://www.nzz.ch/wirtschaft.rss",
-            _gnews("Deutschland OR Österreich OR Schweiz Wirtschaft when:2d"),
+            _gnews("Wirtschaftsdaten OR Konjunktur OR Quartalszahlen when:1d"),
             "https://cointelegraph.com/rss",
             "https://www.coindesk.com/arc/outboundfeeds/rss/",
         ],
     },
 }
 
-# Markt-Snapshot: Stooq-Symbol -> Anzeigename.
-MARKET_SYMBOLS: dict[str, str] = {
+# Markt-Ticker oben (kompakt). Stooq-Symbol -> Anzeigename.
+TICKER_SYMBOLS: dict[str, str] = {
     "^spx": "S&P 500",
     "^ndq": "Nasdaq",
     "^dji": "Dow Jones",
     "^dax": "DAX",
     "btcusd": "Bitcoin",
     "ethusd": "Ethereum",
+}
+
+# Erweitertes Markt-Board (im Extras-Reiter), gruppiert.
+MARKET_BOARD: dict[str, dict[str, str]] = {
+    "Indizes": {
+        "^spx": "S&P 500",
+        "^dax": "DAX",
+        "^ndq": "Nasdaq",
+        "^dji": "Dow Jones",
+        "^ftm": "FTSE 100",
+        "^nkx": "Nikkei 225",
+    },
+    "Währungen": {
+        "eurusd": "EUR/USD",
+        "eurchf": "EUR/CHF",
+        "usdjpy": "USD/JPY",
+    },
+    "Rohstoffe": {
+        "xauusd": "Gold",
+        "cl.f": "Öl (WTI)",
+    },
+    "Krypto": {
+        "btcusd": "Bitcoin",
+        "ethusd": "Ethereum",
+    },
 }
 
 HTTP_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; FinanceDigest/1.0)"}
@@ -121,6 +146,18 @@ def _entry_time(entry) -> datetime | None:
         if t:
             return datetime.fromtimestamp(time.mktime(t), tz=timezone.utc)
     return None
+
+
+def _strip_html(text: str) -> str:
+    import re
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _domain(url: str) -> str:
+    from urllib.parse import urlparse
+    return urlparse(url).netloc.replace("www.", "")
 
 
 def fetch_feed(url: str) -> list[dict]:
@@ -144,9 +181,7 @@ def fetch_feed(url: str) -> list[dict]:
         link = (e.get("link") or "").strip()
         if not title or not link:
             continue
-        summary = (e.get("summary") or "").strip()
-        # HTML-Tags grob entfernen, Länge begrenzen.
-        summary = _strip_html(summary)[:400]
+        summary = _strip_html(e.get("summary") or "")[:400]
         items.append(
             {
                 "headline": title,
@@ -157,18 +192,6 @@ def fetch_feed(url: str) -> list[dict]:
             }
         )
     return items
-
-
-def _strip_html(text: str) -> str:
-    import re
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = html.unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _domain(url: str) -> str:
-    from urllib.parse import urlparse
-    return urlparse(url).netloc.replace("www.", "")
 
 
 def gather_news() -> dict[str, list[dict]]:
@@ -185,7 +208,6 @@ def gather_news() -> dict[str, list[dict]]:
                     continue
                 seen.add(key)
                 collected.append(item)
-        # Neueste zuerst.
         collected.sort(key=lambda x: x["ts"], reverse=True)
         result[tab_id] = collected[:MAX_ITEMS_PER_TAB]
         print(f"    {len(result[tab_id])} Einträge")
@@ -193,7 +215,7 @@ def gather_news() -> dict[str, list[dict]]:
 
 
 # ---------------------------------------------------------------------------
-# 2. Markt-Snapshot (Stooq, ohne API-Key)
+# 2. Marktdaten (Stooq, ohne API-Key)
 # ---------------------------------------------------------------------------
 
 def fetch_quote(symbol: str) -> dict | None:
@@ -216,10 +238,10 @@ def fetch_quote(symbol: str) -> dict | None:
         return None
 
 
-def gather_market() -> list[dict]:
-    print("- Lade Markt-Snapshot …")
+def gather_ticker() -> list[dict]:
+    print("- Lade Markt-Ticker …")
     out = []
-    for sym, name in MARKET_SYMBOLS.items():
+    for sym, name in TICKER_SYMBOLS.items():
         q = fetch_quote(sym)
         if q:
             out.append({"name": name, "last": q["last"], "pct": q["pct"]})
@@ -227,13 +249,62 @@ def gather_market() -> list[dict]:
     return out
 
 
+def gather_board() -> dict[str, list[dict]]:
+    print("- Lade Markt-Board …")
+    board: dict[str, list[dict]] = {}
+    for group, syms in MARKET_BOARD.items():
+        rows = []
+        for sym, name in syms.items():
+            q = fetch_quote(sym)
+            if q:
+                rows.append({"name": name, "last": q["last"], "pct": q["pct"]})
+        board[group] = rows
+    n = sum(len(v) for v in board.values())
+    print(f"    {n} Kurse")
+    return board
+
+
+def fmt_price(v: float) -> str:
+    a = abs(v)
+    if a >= 1000:
+        return f"{v:,.0f}"
+    if a >= 1:
+        return f"{v:,.2f}"
+    return f"{v:.4f}"
+
+
 # ---------------------------------------------------------------------------
-# 3. Zusammenfassung via Claude
+# 3a. Digest ohne KI (Standard)
+# ---------------------------------------------------------------------------
+
+def digest_without_ai(news: dict[str, list[dict]]) -> dict:
+    """Saubere Aggregation: Schlagzeilen + Originalteaser, je Reiter."""
+    tabs = {}
+    for tid in TABS:
+        tabs[tid] = {
+            "id": tid,
+            "summary": "",
+            "items": [
+                {
+                    "headline": it["headline"],
+                    "insight": it["snippet"],
+                    "source": it["source"],
+                    "url": it["url"],
+                }
+                for it in news.get(tid, [])
+            ],
+        }
+    briefing = [news[tid][0]["headline"] for tid in TABS if news.get(tid)]
+    return {"briefing": briefing, "tabs": tabs}
+
+
+# ---------------------------------------------------------------------------
+# 3b. Digest mit KI (optional, --ai)
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = (
     "Du bist Chefredakteur eines privaten, hochwertigen Finanz-Morgenbriefings "
-    "im Stil der Financial Times, geschrieben auf Deutsch für eine Person, die "
+    "im Stil der Financial Times, auf Deutsch, für eine Person, die "
     "International Management studiert und sich für Aktien und Finanzen "
     "interessiert. Fasse prägnant zusammen und ordne ein – kein Geschwafel, "
     "keine Wiederholungen. Wähle pro Reiter die wirklich wichtigsten Meldungen "
@@ -244,31 +315,21 @@ SYSTEM_PROMPT = (
 OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
-        "briefing": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "5-7 wichtigste Punkte des Tages über alle Reiter hinweg.",
-        },
+        "briefing": {"type": "array", "items": {"type": "string"}},
         "tabs": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string"},
-                    "summary": {
-                        "type": "string",
-                        "description": "2-3 Sätze Gesamtüberblick für diesen Reiter.",
-                    },
+                    "summary": {"type": "string"},
                     "items": {
                         "type": "array",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "headline": {"type": "string"},
-                                "insight": {
-                                    "type": "string",
-                                    "description": "1-2 Sätze Einordnung auf Deutsch.",
-                                },
+                                "insight": {"type": "string"},
                                 "source": {"type": "string"},
                                 "url": {"type": "string"},
                             },
@@ -287,37 +348,33 @@ OUTPUT_SCHEMA = {
 }
 
 
-def summarize_with_claude(news: dict[str, list[dict]], market: list[dict]) -> dict:
+def summarize_with_claude(news: dict[str, list[dict]], ticker: list[dict]) -> dict:
     import anthropic
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         print(
-            "FEHLER: ANTHROPIC_API_KEY ist nicht gesetzt. Entweder Secret "
-            "hinterlegen oder mit --no-ai starten.",
+            "FEHLER: --ai gesetzt, aber ANTHROPIC_API_KEY fehlt. Secret "
+            "hinterlegen oder ohne --ai starten.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     client = anthropic.Anthropic(api_key=api_key)
-
-    tab_meta = {tid: cfg["title"] for tid, cfg in TABS.items()}
     payload = {
         "reiter": [
-            {"id": tid, "titel": tab_meta[tid], "meldungen": news.get(tid, [])}
+            {"id": tid, "titel": TABS[tid]["title"], "meldungen": news.get(tid, [])}
             for tid in TABS
         ],
-        "markt": market,
+        "markt": ticker,
     }
     user_msg = (
-        "Hier ist das Rohmaterial der letzten Stunden (RSS-Meldungen pro Reiter "
-        "und ein Markt-Snapshot). Erstelle daraus das heutige Morgenbriefing. "
-        "Gib für jeden Reiter die wichtigsten Meldungen mit kurzer Einordnung "
-        "zurück und nutze nur die vorhandenen URLs.\n\n"
+        "Hier ist das Rohmaterial der letzten Stunden. Erstelle daraus das "
+        "heutige Morgenbriefing; gib pro Reiter die wichtigsten Meldungen mit "
+        "kurzer Einordnung zurück und nutze nur die vorhandenen URLs.\n\n"
         f"```json\n{json.dumps(payload, ensure_ascii=False)}\n```"
     )
-
-    print(f"- Frage Claude ({MODEL}) für die Zusammenfassung …")
+    print(f"- Frage Claude ({MODEL}) …")
     resp = client.messages.create(
         model=MODEL,
         max_tokens=16000,
@@ -327,51 +384,64 @@ def summarize_with_claude(news: dict[str, list[dict]], market: list[dict]) -> di
     )
     text = next((b.text for b in resp.content if b.type == "text"), "")
     data = json.loads(text)
-    # In ein nach Reiter-ID indiziertes Dict umwandeln.
     data["tabs"] = {t["id"]: t for t in data.get("tabs", [])}
     return data
-
-
-def digest_without_ai(news: dict[str, list[dict]]) -> dict:
-    """Fallback ohne KI: Schlagzeilen + Originalteaser, gruppiert nach Reiter."""
-    tabs = {}
-    for tid in TABS:
-        items = [
-            {
-                "headline": it["headline"],
-                "insight": it["snippet"],
-                "source": it["source"],
-                "url": it["url"],
-            }
-            for it in news.get(tid, [])
-        ]
-        tabs[tid] = {"id": tid, "summary": "", "items": items}
-    briefing = [
-        news[tid][0]["headline"] for tid in TABS if news.get(tid)
-    ]
-    return {"briefing": briefing, "tabs": tabs}
 
 
 # ---------------------------------------------------------------------------
 # 4. HTML-Dashboard rendern
 # ---------------------------------------------------------------------------
 
-def render_html(digest: dict, market: list[dict], now: datetime) -> str:
+def _quote_span(q: dict) -> str:
+    cls = "up" if q["pct"] >= 0 else "down"
+    sign = "+" if q["pct"] >= 0 else ""
+    return (
+        f'<span class="tick {cls}"><b>{html.escape(q["name"])}</b> '
+        f'{fmt_price(q["last"])} <i>{sign}{q["pct"]:.2f}%</i></span>'
+    )
+
+
+def render_board(board: dict[str, list[dict]]) -> str:
+    """Erweitertes Markt-Board für den Extras-Reiter."""
+    e = html.escape
+    all_quotes = [q for rows in board.values() for q in rows]
+    if not all_quotes:
+        return '<p class="empty">Keine Marktdaten verfügbar.</p>'
+
+    mover = max(all_quotes, key=lambda q: abs(q["pct"]))
+    msign = "+" if mover["pct"] >= 0 else ""
+    highlight = (
+        f'<p class="bhi">Größte Tagesbewegung: <b>{e(mover["name"])}</b> '
+        f'{msign}{mover["pct"]:.2f}%</p>'
+    )
+
+    sections = []
+    for group, rows in board.items():
+        if not rows:
+            continue
+        cells = []
+        for q in rows:
+            cls = "up" if q["pct"] >= 0 else "down"
+            sign = "+" if q["pct"] >= 0 else ""
+            cells.append(
+                f'<div class="bcell {cls}"><span class="bname">{e(q["name"])}</span>'
+                f'<span class="bval">{fmt_price(q["last"])}</span>'
+                f'<span class="bpct">{sign}{q["pct"]:.2f}%</span></div>'
+            )
+        sections.append(
+            f'<h3 class="bgroup">{e(group)}</h3><div class="board">{"".join(cells)}</div>'
+        )
+    return f'<section class="marketboard">{highlight}{"".join(sections)}</section>'
+
+
+def render_html(digest: dict, ticker: list[dict], board: dict, now: datetime) -> str:
     e = html.escape
     datum = now.strftime("%A, %d. %B %Y · %H:%M Uhr")
 
-    # Markt-Ticker.
-    ticker = []
-    for q in market:
-        cls = "up" if q["pct"] >= 0 else "down"
-        sign = "+" if q["pct"] >= 0 else ""
-        ticker.append(
-            f'<span class="tick {cls}"><b>{e(q["name"])}</b> '
-            f'{q["last"]:,.0f} <i>{sign}{q["pct"]:.2f}%</i></span>'
-        )
-    ticker_html = "".join(ticker) or '<span class="tick">Keine Kursdaten</span>'
+    ticker_html = "".join(_quote_span(q) for q in ticker) or (
+        '<span class="tick">Keine Kursdaten</span>'
+    )
 
-    # Briefing.
     briefing_items = "".join(f"<li>{e(b)}</li>" for b in digest.get("briefing", []))
     briefing_html = (
         f'<section class="briefing"><h2>☕ Morgen-Briefing</h2>'
@@ -380,7 +450,8 @@ def render_html(digest: dict, market: list[dict], now: datetime) -> str:
         else ""
     )
 
-    # Reiter-Knöpfe + Inhalte.
+    board_html = render_board(board)
+
     buttons, panels = [], []
     for i, (tid, cfg) in enumerate(TABS.items()):
         active = " active" if i == 0 else ""
@@ -397,12 +468,13 @@ def render_html(digest: dict, market: list[dict], now: datetime) -> str:
                 f'<article class="card">'
                 f'<a class="hl" href="{e(it["url"])}" target="_blank" rel="noopener">'
                 f'{e(it["headline"])}</a>{insight}'
-                f'<span class="src">{e(it.get("source", ""))}</span>'
-                f"</article>"
+                f'<span class="src">{e(it.get("source", ""))}</span></article>'
             )
         cards_html = "".join(cards) or '<p class="empty">Heute keine Meldungen.</p>'
+        # Im Extras-Reiter das Markt-Board oben anzeigen.
+        extra = board_html if tid == "extras" else ""
         panels.append(
-            f'<div class="panel{active}" id="panel-{tid}">{summary_html}{cards_html}</div>'
+            f'<div class="panel{active}" id="panel-{tid}">{extra}{summary_html}{cards_html}</div>'
         )
 
     return _PAGE_TEMPLATE.format(
@@ -423,8 +495,6 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <meta name="robots" content="noindex, nofollow">
 <title>Mein Finanz-Briefing</title>
 <style>
-  :root {{ --bg:#0f1115; --card:#1a1d24; --line:#2a2e38; --txt:#e8eaed;
-           --muted:#9aa0aa; --acc:#e0a96d; --up:#4caf50; --down:#ef5350; }}
   * {{ box-sizing:border-box; }}
   body {{ margin:0; background:#0f1115; color:#e8eaed;
           font-family:Georgia,'Times New Roman',serif; line-height:1.5; }}
@@ -451,6 +521,20 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .panel {{ display:none; }}
   .panel.active {{ display:block; }}
   .tabsummary {{ color:#c9cdd4; font-style:italic; margin:0 0 16px; }}
+  .marketboard {{ margin-bottom:20px; }}
+  .bhi {{ color:#e0a96d; font-family:system-ui,sans-serif; font-size:.9rem; margin:0 0 12px; }}
+  .bgroup {{ font-size:.8rem; text-transform:uppercase; letter-spacing:.05em;
+             color:#9aa0aa; font-family:system-ui,sans-serif; margin:14px 0 6px; }}
+  .board {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+            gap:8px; }}
+  .bcell {{ background:#1a1d24; border:1px solid #2a2e38; border-radius:8px;
+            padding:8px 10px; display:flex; flex-direction:column;
+            font-family:system-ui,sans-serif; }}
+  .bcell .bname {{ font-size:.78rem; color:#9aa0aa; }}
+  .bcell .bval {{ font-size:1.05rem; font-weight:600; }}
+  .bcell .bpct {{ font-size:.82rem; font-weight:600; }}
+  .bcell.up .bpct {{ color:#4caf50; }}
+  .bcell.down .bpct {{ color:#ef5350; }}
   .card {{ background:#1a1d24; border:1px solid #2a2e38; border-radius:10px;
            padding:14px 16px; margin-bottom:12px; }}
   .card .hl {{ color:#e8eaed; font-weight:600; text-decoration:none; font-size:1.05rem; }}
@@ -504,14 +588,11 @@ def write_outputs(page_html: str, now: datetime) -> None:
     with open(os.path.join(archiv, f"{datestr}.html"), "w", encoding="utf-8") as f:
         f.write(page_html)
 
-    # Archiv-Übersicht neu aufbauen (alle datierten Seiten, neueste zuerst).
     entries = sorted(
         (f[:-5] for f in os.listdir(archiv) if f.endswith(".html") and f != "index.html"),
         reverse=True,
     )
-    links = "".join(
-        f'<li><a href="{d}.html">{d}</a></li>' for d in entries
-    )
+    links = "".join(f'<li><a href="{d}.html">{d}</a></li>' for d in entries)
     archiv_index = (
         "<!DOCTYPE html><html lang='de'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
@@ -534,9 +615,10 @@ def write_outputs(page_html: str, now: datetime) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--no-ai",
+        "--ai",
         action="store_true",
-        help="Ohne Claude-Zusammenfassung, nur Schlagzeilen (zum Testen).",
+        help="Mit Claude-Zusammenfassung (braucht ANTHROPIC_API_KEY). "
+        "Standard ist ohne KI (nur Schlagzeilen).",
     )
     args = parser.parse_args()
 
@@ -544,15 +626,17 @@ def main() -> None:
     print(f"== Finanz-Digest, {now:%Y-%m-%d %H:%M} ==")
 
     news = gather_news()
-    market = gather_market()
+    ticker = gather_ticker()
+    board = gather_board()
 
-    if args.no_ai:
-        print("- Modus: ohne KI (nur Schlagzeilen)")
-        digest = digest_without_ai(news)
+    if args.ai:
+        print("- Modus: mit KI-Zusammenfassung")
+        digest = summarize_with_claude(news, ticker)
     else:
-        digest = summarize_with_claude(news, market)
+        print("- Modus: ohne KI (Schlagzeilen-Aggregation)")
+        digest = digest_without_ai(news)
 
-    page = render_html(digest, market, now)
+    page = render_html(digest, ticker, board, now)
     write_outputs(page, now)
     print("✓ docs/index.html geschrieben.")
 
