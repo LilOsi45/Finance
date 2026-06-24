@@ -4,7 +4,7 @@
 Ablauf:
   1. RSS-Feeds laden (letzte Stunden), pro Reiter gruppieren, deduplizieren.
   2. Markt-Snapshot + erweitertes Markt-Board laden (Indizes, Währungen,
-     Rohstoffe, Krypto – kostenlos via Stooq, kein API-Key nötig).
+     Rohstoffe, Krypto – via Twelve Data, gebündelt.)
   3. (Optional) Claude fasst pro Reiter zusammen. Standard ist OHNE KI:
      saubere Aggregation der wichtigsten Schlagzeilen + Originalteaser.
   4. Ein eigenständiges HTML-Dashboard nach docs/ rendern (inkl. Tagesarchiv).
@@ -21,9 +21,7 @@ Modell und Zeitfenster lassen sich dort leicht anpassen.
 from __future__ import annotations
 
 import argparse
-import csv
 import html
-import io
 import json
 import os
 import sys
@@ -62,8 +60,9 @@ def _gnews(query: str) -> str:
     return "https://news.google.com/rss/search?q=" + quote(query) + "&hl=de&gl=DE&ceid=DE:de"
 
 
-# Persönliche Aktien-Watchlist: Yahoo-Finance-Symbol -> Anzeigename.
+# Persönliche Aktien-Watchlist: internes Symbol -> Anzeigename.
 # US-Aktien: reines Kürzel (AAPL). Deutsche (Xetra): Endung ".DE".
+# Die Übersetzung zur Datenquelle steht in TD_SYMBOLS.
 WATCHLIST: dict[str, str] = {
     "AAPL": "Apple",
     "MSFT": "Microsoft",
@@ -81,7 +80,7 @@ WATCHLIST: dict[str, str] = {
 }
 
 
-# Zuordnung Yahoo-Symbol -> TradingView (Börse:Kürzel) für professionelle Charts.
+# Zuordnung internes Symbol -> TradingView (Börse:Kürzel) für Charts.
 TRADINGVIEW: dict[str, str] = {
     "AAPL": "NASDAQ:AAPL",
     "MSFT": "NASDAQ:MSFT",
@@ -96,6 +95,16 @@ TRADINGVIEW: dict[str, str] = {
     "MBG.DE": "XETR:MBG",
     "VOW3.DE": "XETR:VOW3",
     "DBK.DE": "XETR:DBK",
+}
+
+
+# Sektor-Zuordnung für die Research-Gruppierung.
+SECTORS: dict[str, str] = {
+    "Apple": "Technologie", "Microsoft": "Technologie", "Nvidia": "Technologie",
+    "Amazon": "Technologie", "Alphabet": "Technologie", "Meta": "Technologie",
+    "SAP": "Technologie", "Siemens": "Industrie", "Allianz": "Finanzen",
+    "Deutsche Bank": "Finanzen", "Tesla": "Automobil", "Mercedes-Benz": "Automobil",
+    "Volkswagen": "Automobil",
 }
 
 
@@ -120,8 +129,8 @@ TABS: dict[str, dict] = {
         "feeds": [
             "https://www.tagesschau.de/wirtschaft/index~rss2.xml",
             "https://www.handelsblatt.com/contentexport/feed/finanzen",
-            "https://finance.yahoo.com/news/rssindex",
             "http://feeds.marketwatch.com/marketwatch/topstories/",
+            "https://www.cnbc.com/id/100003114/device/rss/rss.html",
             "https://www.ft.com/markets?format=rss",
             _gnews("DAX OR S&P 500 OR Nasdaq Aktien Börse when:2d"),
         ],
@@ -154,7 +163,7 @@ TABS: dict[str, dict] = {
     },
 }
 
-# Markt-Ticker oben (kompakt). Yahoo-Finance-Symbol -> Anzeigename.
+# Markt-Ticker oben (kompakt). Internes Symbol -> Anzeigename.
 TICKER_SYMBOLS: dict[str, str] = {
     "^GSPC": "S&P 500",
     "^IXIC": "Nasdaq",
@@ -330,64 +339,137 @@ def gather_news() -> dict[str, list[dict]]:
 
 
 # ---------------------------------------------------------------------------
-# 2. Marktdaten (Stooq, ohne API-Key)
+# 2. Marktdaten (Twelve Data, gebündelt – kostenloser API-Key)
 # ---------------------------------------------------------------------------
 
-def fetch_quote(symbol: str) -> dict | None:
-    """Aktueller Kurs + Tagesveränderung in % via Yahoo-Finance (kein API-Key).
-    Funktioniert zuverlässig von Servern und liefert nahezu Echtzeitkurse."""
+TD_BASE = "https://api.twelvedata.com"
+
+# Internes Symbol -> Twelve-Data-Symbol. Bei Bedarf hier einzeln anpassen.
+TD_SYMBOLS: dict[str, str] = {
+    # Aktien (US: Kürzel; Deutschland: <Kürzel>:XETR)
+    "AAPL": "AAPL", "MSFT": "MSFT", "NVDA": "NVDA", "AMZN": "AMZN",
+    "GOOGL": "GOOGL", "META": "META", "TSLA": "TSLA",
+    "SAP.DE": "SAP:XETR", "SIE.DE": "SIE:XETR", "ALV.DE": "ALV:XETR",
+    "MBG.DE": "MBG:XETR", "VOW3.DE": "VOW3:XETR", "DBK.DE": "DBK:XETR",
+    # Indizes
+    "^GSPC": "GSPC", "^GDAXI": "GDAXI", "^IXIC": "IXIC", "^DJI": "DJI",
+    "^FTSE": "FTSE", "^N225": "N225",
+    # Währungen
+    "EURUSD=X": "EUR/USD", "EURCHF=X": "EUR/CHF", "USDJPY=X": "USD/JPY",
+    # Rohstoffe
+    "GC=F": "XAU/USD", "CL=F": "WTI/USD",
+    # Krypto
+    "BTC-USD": "BTC/USD", "ETH-USD": "ETH/USD",
+}
+
+
+def _td_key() -> str:
+    return os.environ.get("TWELVEDATA_API_KEY", "")
+
+
+def td_quotes(internal_syms) -> dict[str, dict]:
+    """Aktuelle Kurse + Tagesänderung + 52-Wochen-Spanne, gebündelt in 1 Abruf."""
+    key = _td_key()
+    out: dict[str, dict] = {}
+    if not key:
+        print("  ! TWELVEDATA_API_KEY fehlt – keine Kurse.", file=sys.stderr)
+        return out
+    tdmap = {s: TD_SYMBOLS.get(s, s) for s in internal_syms}
+    td_list = ",".join(sorted(set(tdmap.values())))
+    url = f"{TD_BASE}/quote?symbol={quote(td_list)}&apikey={key}&dp=4"
+    try:
+        resp = requests.get(url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, dict) and "symbol" in data:  # Einzelsymbol-Antwort
+            data = {data["symbol"]: data}
+        for internal, td in tdmap.items():
+            d = data.get(td) if isinstance(data, dict) else None
+            if not isinstance(d, dict) or not d.get("close"):
+                continue
+            try:
+                fw = d.get("fifty_two_week") or {}
+                out[internal] = {
+                    "last": float(d["close"]),
+                    "pct": float(d.get("percent_change") or 0),
+                    "w52h": float(fw["high"]) if fw.get("high") else None,
+                    "w52l": float(fw["low"]) if fw.get("low") else None,
+                    "currency": d.get("currency", ""),
+                }
+            except (TypeError, ValueError):
+                continue
+    except Exception as exc:
+        print(f"  ! Twelve-Data-Quote-Fehler: {exc}", file=sys.stderr)
+    return out
+
+
+def td_series(internal_syms, outputsize: int = 252) -> dict[str, list[float]]:
+    """Tägliche Schlusskurse (aufsteigend), gebündelt in 1 Abruf."""
+    key = _td_key()
+    out: dict[str, list[float]] = {}
+    if not key:
+        return out
+    tdmap = {s: TD_SYMBOLS.get(s, s) for s in internal_syms}
+    td_list = ",".join(sorted(set(tdmap.values())))
     url = (
-        "https://query1.finance.yahoo.com/v8/finance/chart/"
-        + quote(symbol)
-        + "?range=1mo&interval=1d"
+        f"{TD_BASE}/time_series?symbol={quote(td_list)}&interval=1day"
+        f"&outputsize={outputsize}&order=ASC&apikey={key}&dp=4"
     )
     try:
         resp = requests.get(url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
         resp.raise_for_status()
-        res = resp.json()["chart"]["result"][0]
-        meta = res.get("meta", {})
-        try:
-            hist = [c for c in res["indicators"]["quote"][0]["close"] if c is not None]
-        except Exception:
-            hist = []
-        # Bevorzugt: aktueller Kurs + Vortagesschluss aus den Metadaten.
-        last = meta.get("regularMarketPrice")
-        prev = meta.get("chartPreviousClose") or meta.get("previousClose")
-        if last is None or prev is None:
-            # Fallback: letzte zwei Tagesschlüsse aus der Zeitreihe.
-            if len(hist) < 2:
-                return None
-            last, prev = hist[-1], hist[-2]
-        pct = (last - prev) / prev * 100 if prev else 0.0
-        return {"last": float(last), "pct": float(pct), "hist": [float(c) for c in hist]}
+        data = resp.json()
+        if isinstance(data, dict) and "values" in data:  # Einzelsymbol-Antwort
+            data = {next(iter(set(tdmap.values()))): data}
+        for internal, td in tdmap.items():
+            node = data.get(td) if isinstance(data, dict) else None
+            vals = node.get("values") if isinstance(node, dict) else None
+            if not vals:
+                continue
+            closes = []
+            for v in vals:
+                try:
+                    closes.append(float(v["close"]))
+                except (TypeError, ValueError, KeyError):
+                    pass
+            if closes:
+                out[internal] = closes
     except Exception as exc:
-        print(f"  ! Kurs-Fehler {symbol}: {exc}", file=sys.stderr)
-        return None
-
-
-def gather_ticker() -> list[dict]:
-    print("- Lade Markt-Ticker …")
-    out = []
-    for sym, name in TICKER_SYMBOLS.items():
-        q = fetch_quote(sym)
-        if q:
-            out.append({"name": name, "last": q["last"], "pct": q["pct"]})
-    print(f"    {len(out)} Kurse")
+        print(f"  ! Twelve-Data-Series-Fehler: {exc}", file=sys.stderr)
     return out
 
 
-def gather_board() -> dict[str, list[dict]]:
-    print("- Lade Markt-Board …")
+def fetch_market_data() -> tuple[dict, dict]:
+    all_syms = (
+        set(WATCHLIST) | set(TICKER_SYMBOLS)
+        | {s for g in MARKET_BOARD.values() for s in g}
+    )
+    print("- Lade Marktdaten (Twelve Data) …")
+    quotes = td_quotes(all_syms)
+    series = td_series(set(WATCHLIST), outputsize=252)
+    print(f"    {len(quotes)} Kurse, {len(series)} Zeitreihen")
+    return quotes, series
+
+
+def gather_ticker(quotes: dict) -> list[dict]:
+    out = []
+    for sym, name in TICKER_SYMBOLS.items():
+        q = quotes.get(sym)
+        if q:
+            out.append({"name": name, "last": q["last"], "pct": q["pct"]})
+    print(f"- Markt-Ticker: {len(out)} Kurse")
+    return out
+
+
+def gather_board(quotes: dict) -> dict[str, list[dict]]:
     board: dict[str, list[dict]] = {}
     for group, syms in MARKET_BOARD.items():
         rows = []
         for sym, name in syms.items():
-            q = fetch_quote(sym)
+            q = quotes.get(sym)
             if q:
                 rows.append({"name": name, "last": q["last"], "pct": q["pct"]})
         board[group] = rows
-    n = sum(len(v) for v in board.values())
-    print(f"    {n} Kurse")
     return board
 
 
@@ -406,6 +488,16 @@ def _rsi(closes: list[float], period: int = 14) -> float | None:
         return 100.0
     rs = gain / loss
     return 100 - 100 / (1 + rs)
+
+
+def _volatility(hist: list[float]) -> float | None:
+    """Annualisierte Volatilität (in %) aus täglichen Renditen."""
+    pts = [c for c in hist if c]
+    if len(pts) < 3:
+        return None
+    import statistics
+    rets = [pts[i] / pts[i - 1] - 1 for i in range(1, len(pts))]
+    return statistics.pstdev(rets) * (252 ** 0.5) * 100
 
 
 def _ea_score(last: float, hist: list[float], p5, p20) -> dict:
@@ -446,14 +538,13 @@ def _ea_score(last: float, hist: list[float], p5, p20) -> dict:
     return {"score": score, "signal": signal, "rsi": rsi, "reasons": reasons}
 
 
-def gather_watchlist() -> list[dict]:
-    print("- Lade Watchlist-Kurse …")
+def gather_watchlist(quotes: dict, series: dict) -> list[dict]:
     out = []
     for sym, name in WATCHLIST.items():
-        q = fetch_quote(sym)
+        q = quotes.get(sym)
         if not q:
             continue
-        hist = q.get("hist", [])
+        hist = series.get(sym, [])
         last = q["last"]
 
         def perf(days: int) -> float | None:
@@ -461,9 +552,11 @@ def gather_watchlist() -> list[dict]:
                 return (last / hist[-1 - days] - 1) * 100
             return None
 
+        # Trend gegen den ~1-Monats-Schnitt (letzte 22 Handelstage).
+        ref = hist[-22:] if len(hist) >= 22 else hist
         trend = "–"
-        if len(hist) >= 5:
-            sma = sum(hist) / len(hist)
+        if len(ref) >= 5:
+            sma = sum(ref) / len(ref)
             if last > sma * 1.01:
                 trend = "Aufwärts"
             elif last < sma * 0.99:
@@ -472,6 +565,9 @@ def gather_watchlist() -> list[dict]:
                 trend = "Seitwärts"
         p5, p20 = perf(5), perf(20)
         ea = _ea_score(last, hist, p5, p20)
+        spark = hist[-30:]
+        w52h = q.get("w52h") or (max(hist) if hist else None)
+        w52l = q.get("w52l") or (min(hist) if hist else None)
         out.append(
             {
                 "name": name,
@@ -485,9 +581,15 @@ def gather_watchlist() -> list[dict]:
                 "signal": ea["signal"],
                 "rsi": ea["rsi"],
                 "reasons": ea["reasons"],
+                "hist": spark,
+                "w52h": w52h,
+                "w52l": w52l,
+                "vol": _volatility(hist[-60:] if len(hist) >= 60 else hist),
+                "sector": SECTORS.get(name, "Sonstige"),
+                "currency": q.get("currency", ""),
             }
         )
-    print(f"    {len(out)} Kurse")
+    print(f"- Watchlist: {len(out)} Kurse, {sum(1 for r in out if r['hist'])} mit Verlauf")
     return out
 
 
@@ -806,6 +908,48 @@ def render_analysis(rows: list[dict], ai_text: str = "", ai_stand: str = "") -> 
     )
 
 
+def _sparkline(hist: list[float], w: int = 116, h: int = 30) -> str:
+    """Mini-Kursverlauf als Inline-SVG (Farbe nach Gesamtrichtung)."""
+    pts = [c for c in hist if c is not None]
+    if len(pts) < 2:
+        return ""
+    lo, hi = min(pts), max(pts)
+    rng = (hi - lo) or 1.0
+    n = len(pts)
+    coords = [
+        f"{i / (n - 1) * (w - 2) + 1:.1f},{h - 1 - (v - lo) / rng * (h - 2):.1f}"
+        for i, v in enumerate(pts)
+    ]
+    color = "var(--up)" if pts[-1] >= pts[0] else "var(--down)"
+    area = f"M{coords[0]} L" + " L".join(coords) + f" L{w-1:.1f},{h} L1,{h} Z"
+    return (
+        f'<svg class="spark" viewBox="0 0 {w} {h}" preserveAspectRatio="none" '
+        f'aria-hidden="true"><path d="{area}" fill="{color}" opacity="0.10"/>'
+        f'<polyline fill="none" stroke="{color}" stroke-width="1.6" '
+        f'points="{" ".join(coords)}"/></svg>'
+    )
+
+
+def _range_bar(last: float, lo, hi) -> str:
+    """52-Wochen-Spanne mit Markierung des aktuellen Kurses."""
+    if not (lo and hi and hi > lo):
+        return ""
+    pos = max(0.0, min(100.0, (last - lo) / (hi - lo) * 100))
+    return (
+        f'<div class="rbar" title="52-Wochen-Spanne"><div class="rdot" '
+        f'style="left:{pos:.0f}%"></div></div>'
+    )
+
+
+def _score_meter(score: int) -> str:
+    """Visuelle Score-Skala von -5 (Verkauf) bis +5 (Kauf) mit Marker."""
+    pos = max(0.0, min(100.0, (score + 5) / 10 * 100))
+    return (
+        f'<div class="meter"><div class="mmid"></div>'
+        f'<div class="mdot" style="left:{pos:.0f}%"></div></div>'
+    )
+
+
 def render_ea(rows: list[dict]) -> str:
     """Systematischer Signal-Reiter: Kaufen / Halten / Verkaufen (regelbasiert)."""
     e = html.escape
@@ -823,11 +967,27 @@ def render_ea(rows: list[dict]) -> str:
     def card(r: dict) -> str:
         cls = {"Kaufen": "buy", "Verkaufen": "sell"}.get(r["signal"], "hold")
         reasons = " · ".join(r.get("reasons", [])) or "neutrale Lage"
+        rsi, vol = r.get("rsi"), r.get("vol")
+        metrics = []
+        if rsi is not None:
+            metrics.append(f"RSI {rsi:.0f}")
+        if vol is not None:
+            metrics.append(f"Vola {vol:.0f}%")
+        metrics.append(f"Score {r['score']:+d}")
+        rng = _range_bar(r.get("last"), r.get("w52l"), r.get("w52h"))
+        rng_block = (
+            f'<div class="earange"><span class="erlab">52-Wo</span>{rng}</div>' if rng else ""
+        )
         return (
             f'<a class="eacard {cls}" href="{e(_quote_link(r.get("symbol", "")))}" '
             f'target="_blank" rel="noopener noreferrer">'
             f'<div class="eatop"><span class="eaname">{e(r["name"])}</span>{badge(r["signal"])}</div>'
-            f'<div class="eareason">{e(reasons)}</div></a>'
+            f'<div class="easec">{e(r.get("sector", ""))}</div>'
+            f'{_sparkline(r.get("hist", []))}'
+            f'{_score_meter(r["score"])}'
+            f'<div class="eareason">{e(reasons)}</div>'
+            f'<div class="eametrics">{e(" · ".join(metrics))}</div>'
+            f'{rng_block}</a>'
         )
 
     def group(title: str, items: list[dict], cls: str) -> str:
@@ -863,10 +1023,23 @@ def render_ea(rows: list[dict]) -> str:
         + "".join(trs)
         + "</tbody></table>"
     )
+    avg = sum(r["score"] for r in rows) / len(rows)
+    regime = (
+        "Risk-off · defensives Umfeld" if avg <= -1
+        else "Risk-on · offensives Umfeld" if avg >= 1
+        else "Neutral · gemischtes Umfeld"
+    )
+    rcls = "sell" if avg <= -1 else "buy" if avg >= 1 else "hold"
+    summary = (
+        f'<div class="earegime {rcls}"><span class="ergime">{e(regime)}</span>'
+        f'<span class="ersub">{len(buy)} Kauf · {len(hold)} Halten · {len(sell)} Verkauf '
+        f'· Ø-Score {avg:+.1f}</span></div>'
+    )
     return (
         '<section class="analysis"><h2>Signal-Radar</h2>'
         f'<p class="asub">Regelbasiertes technisches Modell · {len(rows)} Werte · '
         'keine Anlageberatung</p>'
+        f'{summary}'
         f'{group("📈 Kaufenswert", buy, "buy")}'
         f'{group("⚖️ Halten / Abwarten", hold, "hold")}'
         f'{group("📉 Eher verkaufen", sell, "sell")}'
@@ -904,6 +1077,7 @@ def render_watchlist(quotes: list[dict]) -> str:
             f'<span class="bname">{e(q["name"])}</span>'
             f'<span class="bval">{fmt_price(q["last"])}</span>'
             f'<span class="bpct"><span class="arr">{arr}</span> {sign}{q["pct"]:.2f}%</span>'
+            f'{_sparkline(q.get("hist", []))}'
             f'<span class="blink">Chart · TradingView ›</span></a>'
         )
     return f'<section class="marketboard">{highlight}<div class="board">{"".join(cells)}</div></section>'
@@ -1161,6 +1335,28 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .eatable {{ margin-top:8px; }}
   .eatable td {{ font-variant-numeric:tabular-nums; }}
 
+  .spark {{ width:100%; height:30px; display:block; margin:8px 0 2px; }}
+  .meter {{ position:relative; height:6px; border-radius:3px; margin:9px 0 4px; opacity:.7;
+            background:linear-gradient(90deg,var(--down),var(--muted2),var(--up)); }}
+  .mmid {{ position:absolute; top:-2px; bottom:-2px; left:50%; width:1px; background:rgba(255,255,255,.25); }}
+  .mdot {{ position:absolute; top:-3px; width:3px; height:12px; background:var(--text);
+           transform:translateX(-50%); border-radius:1px; }}
+  .easec {{ font-size:.7rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted2); margin-bottom:2px; }}
+  .eametrics {{ font-size:.72rem; color:var(--muted); margin-top:6px; font-variant-numeric:tabular-nums; }}
+  .earange {{ display:flex; align-items:center; gap:8px; margin-top:8px; }}
+  .erlab {{ font-size:.62rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted2); }}
+  .rbar {{ position:relative; flex:1; height:4px; border-radius:2px;
+           background:linear-gradient(90deg,var(--down),var(--muted2),var(--up)); opacity:.55; }}
+  .rdot {{ position:absolute; top:-3px; width:2px; height:10px; background:var(--text);
+           transform:translateX(-50%); border-radius:1px; }}
+  .earegime {{ display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 14px;
+               border:1px solid var(--line); border-left:3px solid var(--muted2);
+               border-radius:12px; padding:12px 16px; margin:4px 0 18px; background:var(--bg2); }}
+  .earegime.buy {{ border-left-color:var(--up); }}
+  .earegime.sell {{ border-left-color:var(--down); }}
+  .ergime {{ font-size:1rem; font-weight:600; }}
+  .ersub {{ font-size:.78rem; color:var(--muted); font-variant-numeric:tabular-nums; }}
+
   .archiv {{ display:inline-block; margin-top:30px; color:var(--gold); text-decoration:none;
              font-size:.8rem; letter-spacing:.04em; }}
   .archiv:hover {{ color:var(--gold-bright); }}
@@ -1260,9 +1456,10 @@ def main() -> None:
     print(f"== Finanz-Digest, {now:%Y-%m-%d %H:%M} ==")
 
     news = gather_news()
-    ticker = gather_ticker()
-    board = gather_board()
-    watchlist = gather_watchlist()
+    quotes, series = fetch_market_data()
+    ticker = gather_ticker(quotes)
+    board = gather_board(quotes)
+    watchlist = gather_watchlist(quotes, series)
 
     digest = digest_without_ai(news)
     if args.ai:
