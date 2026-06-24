@@ -119,7 +119,6 @@ TABS: dict[str, dict] = {
             "https://finance.yahoo.com/news/rssindex",
             "http://feeds.marketwatch.com/marketwatch/topstories/",
             "https://www.ft.com/markets?format=rss",
-            _gnews("site:ft.com markets OR stocks OR economy when:2d"),
             _gnews("DAX OR S&P 500 OR Nasdaq Aktien Börse when:2d"),
         ],
     },
