@@ -58,22 +58,22 @@ def _gnews(query: str) -> str:
     return "https://news.google.com/rss/search?q=" + quote(query) + "&hl=de&gl=DE&ceid=DE:de"
 
 
-# Persönliche Aktien-Watchlist: Stooq-Symbol -> Anzeigename.
-# US-Aktien enden auf ".us", deutsche (Xetra) auf ".de".
+# Persönliche Aktien-Watchlist: Yahoo-Finance-Symbol -> Anzeigename.
+# US-Aktien: reines Kürzel (AAPL). Deutsche (Xetra): Endung ".DE".
 WATCHLIST: dict[str, str] = {
-    "aapl.us": "Apple",
-    "msft.us": "Microsoft",
-    "nvda.us": "Nvidia",
-    "amzn.us": "Amazon",
-    "googl.us": "Alphabet",
-    "meta.us": "Meta",
-    "tsla.us": "Tesla",
-    "sap.de": "SAP",
-    "sie.de": "Siemens",
-    "alv.de": "Allianz",
-    "mbg.de": "Mercedes-Benz",
-    "vow3.de": "Volkswagen",
-    "dbk.de": "Deutsche Bank",
+    "AAPL": "Apple",
+    "MSFT": "Microsoft",
+    "NVDA": "Nvidia",
+    "AMZN": "Amazon",
+    "GOOGL": "Alphabet",
+    "META": "Meta",
+    "TSLA": "Tesla",
+    "SAP.DE": "SAP",
+    "SIE.DE": "Siemens",
+    "ALV.DE": "Allianz",
+    "MBG.DE": "Mercedes-Benz",
+    "VOW3.DE": "Volkswagen",
+    "DBK.DE": "Deutsche Bank",
 }
 
 
@@ -125,38 +125,38 @@ TABS: dict[str, dict] = {
     },
 }
 
-# Markt-Ticker oben (kompakt). Stooq-Symbol -> Anzeigename.
+# Markt-Ticker oben (kompakt). Yahoo-Finance-Symbol -> Anzeigename.
 TICKER_SYMBOLS: dict[str, str] = {
-    "^spx": "S&P 500",
-    "^ndq": "Nasdaq",
-    "^dji": "Dow Jones",
-    "^dax": "DAX",
-    "btcusd": "Bitcoin",
-    "ethusd": "Ethereum",
+    "^GSPC": "S&P 500",
+    "^IXIC": "Nasdaq",
+    "^DJI": "Dow Jones",
+    "^GDAXI": "DAX",
+    "BTC-USD": "Bitcoin",
+    "ETH-USD": "Ethereum",
 }
 
 # Erweitertes Markt-Board (im Extras-Reiter), gruppiert.
 MARKET_BOARD: dict[str, dict[str, str]] = {
     "Indizes": {
-        "^spx": "S&P 500",
-        "^dax": "DAX",
-        "^ndq": "Nasdaq",
-        "^dji": "Dow Jones",
-        "^ftm": "FTSE 100",
-        "^nkx": "Nikkei 225",
+        "^GSPC": "S&P 500",
+        "^GDAXI": "DAX",
+        "^IXIC": "Nasdaq",
+        "^DJI": "Dow Jones",
+        "^FTSE": "FTSE 100",
+        "^N225": "Nikkei 225",
     },
     "Währungen": {
-        "eurusd": "EUR/USD",
-        "eurchf": "EUR/CHF",
-        "usdjpy": "USD/JPY",
+        "EURUSD=X": "EUR/USD",
+        "EURCHF=X": "EUR/CHF",
+        "USDJPY=X": "USD/JPY",
     },
     "Rohstoffe": {
-        "xauusd": "Gold",
-        "cl.f": "Öl (WTI)",
+        "GC=F": "Gold",
+        "CL=F": "Öl (WTI)",
     },
     "Krypto": {
-        "btcusd": "Bitcoin",
-        "ethusd": "Ethereum",
+        "BTC-USD": "Bitcoin",
+        "ETH-USD": "Ethereum",
     },
 }
 
@@ -259,20 +259,29 @@ def gather_news() -> dict[str, list[dict]]:
 # ---------------------------------------------------------------------------
 
 def fetch_quote(symbol: str) -> dict | None:
-    """Letzter Schlusskurs + Tagesveränderung in % via Stooq-Historie."""
-    d2 = datetime.now(timezone.utc).strftime("%Y%m%d")
-    d1 = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y%m%d")
-    url = f"https://stooq.com/q/d/l/?s={symbol}&d1={d1}&d2={d2}&i=d"
+    """Aktueller Kurs + Tagesveränderung in % via Yahoo-Finance (kein API-Key).
+    Funktioniert zuverlässig von Servern und liefert nahezu Echtzeitkurse."""
+    url = (
+        "https://query1.finance.yahoo.com/v8/finance/chart/"
+        + quote(symbol)
+        + "?range=5d&interval=1d"
+    )
     try:
         resp = requests.get(url, headers=HTTP_HEADERS, timeout=HTTP_TIMEOUT)
         resp.raise_for_status()
-        rows = list(csv.DictReader(io.StringIO(resp.text)))
-        closes = [float(r["Close"]) for r in rows if r.get("Close") not in (None, "", "N/D")]
-        if len(closes) < 2:
-            return None
-        last, prev = closes[-1], closes[-2]
+        res = resp.json()["chart"]["result"][0]
+        meta = res.get("meta", {})
+        # Bevorzugt: aktueller Kurs + Vortagesschluss aus den Metadaten.
+        last = meta.get("regularMarketPrice")
+        prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+        if last is None or prev is None:
+            # Fallback: letzte zwei Tagesschlüsse aus der Zeitreihe.
+            closes = [c for c in res["indicators"]["quote"][0]["close"] if c is not None]
+            if len(closes) < 2:
+                return None
+            last, prev = closes[-1], closes[-2]
         pct = (last - prev) / prev * 100 if prev else 0.0
-        return {"last": last, "pct": pct}
+        return {"last": float(last), "pct": float(pct)}
     except Exception as exc:
         print(f"  ! Kurs-Fehler {symbol}: {exc}", file=sys.stderr)
         return None
