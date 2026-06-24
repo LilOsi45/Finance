@@ -52,6 +52,10 @@ MODEL = "claude-opus-4-8"
 # Zeitzone für Datum/Uhrzeit in der Anzeige.
 TZ = ZoneInfo("Europe/Berlin")
 
+# Der KI-Experten-Kommentar wird nur zu diesen Uhrzeiten (Berlin) neu erzeugt
+# (spart Kosten) und sonst aus dem Zwischenspeicher weiterverwendet.
+AI_HOURS = {7, 13}
+
 
 def _gnews(query: str) -> str:
     """Google-News-Such-Feed (zuverlässig, sprachlich filterbar)."""
@@ -77,6 +81,24 @@ WATCHLIST: dict[str, str] = {
 }
 
 
+# Zuordnung Yahoo-Symbol -> TradingView (Börse:Kürzel) für professionelle Charts.
+TRADINGVIEW: dict[str, str] = {
+    "AAPL": "NASDAQ:AAPL",
+    "MSFT": "NASDAQ:MSFT",
+    "NVDA": "NASDAQ:NVDA",
+    "AMZN": "NASDAQ:AMZN",
+    "GOOGL": "NASDAQ:GOOGL",
+    "META": "NASDAQ:META",
+    "TSLA": "NASDAQ:TSLA",
+    "SAP.DE": "XETR:SAP",
+    "SIE.DE": "XETR:SIE",
+    "ALV.DE": "XETR:ALV",
+    "MBG.DE": "XETR:MBG",
+    "VOW3.DE": "XETR:VOW3",
+    "DBK.DE": "XETR:DBK",
+}
+
+
 def _watchlist_query() -> str:
     names = " OR ".join(f'"{n}"' for n in WATCHLIST.values())
     return _gnews(f"({names}) Aktie when:2d")
@@ -96,6 +118,8 @@ TABS: dict[str, dict] = {
             "https://www.handelsblatt.com/contentexport/feed/finanzen",
             "https://finance.yahoo.com/news/rssindex",
             "http://feeds.marketwatch.com/marketwatch/topstories/",
+            "https://www.ft.com/markets?format=rss",
+            _gnews("site:ft.com markets OR stocks OR economy when:2d"),
             _gnews("DAX OR S&P 500 OR Nasdaq Aktien Börse when:2d"),
         ],
     },
@@ -104,6 +128,7 @@ TABS: dict[str, dict] = {
         "feeds": [
             "https://www.handelsblatt.com/contentexport/feed/unternehmen",
             "https://www.nzz.ch/wirtschaft.rss",
+            "https://www.ft.com/companies?format=rss",
             _gnews("Konzern OR Übernahme OR M&A OR CEO Strategie when:2d"),
             _gnews("global economy OR world trade OR central bank when:2d"),
         ],
@@ -112,6 +137,7 @@ TABS: dict[str, dict] = {
         "title": "Weltnachrichten",
         "feeds": [
             "https://www.tagesschau.de/ausland/index~rss2.xml",
+            "https://www.ft.com/world?format=rss",
             _gnews("Geopolitik OR Konflikt OR Wahl Weltpolitik when:2d"),
         ],
     },
@@ -398,8 +424,11 @@ def gather_watchlist() -> list[dict]:
 
 
 def _quote_link(symbol: str) -> str:
-    """Link auf die Yahoo-Finance-Kursseite (Live-Kurs + Chart)."""
-    return f"https://finance.yahoo.com/quote/{quote(symbol)}" if symbol else "#"
+    """Link auf die TradingView-Kursseite (professioneller Live-Chart)."""
+    tv = TRADINGVIEW.get(symbol)
+    if tv:
+        return f"https://www.tradingview.com/symbols/{tv.replace(':', '-')}/"
+    return f"https://www.tradingview.com/symbols/{quote(symbol)}/" if symbol else "#"
 
 
 def fmt_price(v: float) -> str:
@@ -573,6 +602,35 @@ def expert_commentary(watchlist: list[dict], news: dict[str, list[dict]]) -> str
         return ""
 
 
+def _expert_cache_path() -> str:
+    return os.path.join(os.path.dirname(__file__), "..", "docs", "expert_cache.json")
+
+
+def get_expert_commentary(now: datetime, watchlist: list[dict], news: dict) -> dict:
+    """KI-Kommentar nur zu AI_HOURS neu erzeugen, sonst zwischengespeicherten
+    Text weiterverwenden. Rückgabe: {"text":..., "stand":...}."""
+    cache: dict = {}
+    try:
+        with open(_expert_cache_path(), encoding="utf-8") as f:
+            cache = json.load(f)
+    except Exception:
+        cache = {}
+
+    # Neu erzeugen an den definierten Stunden – oder einmalig, falls noch leer.
+    if now.hour in AI_HOURS or not cache.get("text"):
+        text = expert_commentary(watchlist, news)
+        if text:
+            cache = {"text": text, "stand": now.strftime("%d.%m. %H:%M Uhr")}
+            try:
+                path = _expert_cache_path()
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(cache, f, ensure_ascii=False)
+            except Exception as exc:
+                print(f"  ! Cache-Schreibfehler: {exc}", file=sys.stderr)
+    return {"text": cache.get("text", ""), "stand": cache.get("stand", "")}
+
+
 # ---------------------------------------------------------------------------
 # 4. HTML-Dashboard rendern
 # ---------------------------------------------------------------------------
@@ -621,7 +679,7 @@ def render_board(board: dict[str, list[dict]]) -> str:
     return f'<section class="marketboard">{highlight}{"".join(sections)}</section>'
 
 
-def render_analysis(rows: list[dict], ai_text: str = "") -> str:
+def render_analysis(rows: list[dict], ai_text: str = "", ai_stand: str = "") -> str:
     """Faktenbasierte Experten-Einordnung der Watchlist + optionaler KI-Kommentar."""
     e = html.escape
     if not rows:
@@ -664,8 +722,9 @@ def render_analysis(rows: list[dict], ai_text: str = "") -> str:
         + "".join(trs)
         + "</tbody></table>"
     )
+    stand_part = f' <span class="aistand">(Stand {e(ai_stand)})</span>' if ai_stand else ""
     ai_block = (
-        f'<div class="aikom"><b>Einordnung des Analysten:</b> {e(ai_text)}</div>'
+        f'<div class="aikom"><b>Einordnung des Analysten:</b>{stand_part} {e(ai_text)}</div>'
         if ai_text
         else ""
     )
@@ -702,7 +761,7 @@ def render_watchlist(quotes: list[dict]) -> str:
             f'<span class="bname">{e(q["name"])}</span>'
             f'<span class="bval">{fmt_price(q["last"])}</span>'
             f'<span class="bpct"><span class="arr">{arr}</span> {sign}{q["pct"]:.2f}%</span>'
-            f'<span class="blink">Kurs &amp; Chart ›</span></a>'
+            f'<span class="blink">Chart · TradingView ›</span></a>'
         )
     return f'<section class="marketboard">{highlight}<div class="board">{"".join(cells)}</div></section>'
 
@@ -779,7 +838,9 @@ def render_html(
         if tid == "extras":
             extra = board_html
         elif tid == "watchlist":
-            extra = render_analysis(watchlist, digest.get("expert", "")) + render_watchlist(watchlist)
+            extra = render_analysis(
+                watchlist, digest.get("expert", ""), digest.get("expert_stand", "")
+            ) + render_watchlist(watchlist)
         panels.append(
             f'<div class="panel{active}" id="panel-{tid}">{extra}{summary_html}{cards_html}</div>'
         )
@@ -929,6 +990,7 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .aikom {{ margin-top:18px; padding-top:16px; border-top:1px solid var(--line);
             color:#c7d2e2; font-size:.92rem; line-height:1.7; }}
   .aikom b {{ color:var(--gold-bright); font-weight:600; }}
+  .aistand {{ color:var(--muted2); font-size:.78em; }}
 
   .archiv {{ display:inline-block; margin-top:30px; color:var(--gold); text-decoration:none;
              font-size:.8rem; letter-spacing:.04em; }}
@@ -1035,8 +1097,14 @@ def main() -> None:
 
     digest = digest_without_ai(news)
     if args.ai:
-        print("- Modus: mit KI-Experten-Kommentar (Schlagzeilen bleiben faktenbasiert)")
-        digest["expert"] = expert_commentary(watchlist, news)
+        regenerate = (now.hour in AI_HOURS)
+        print(
+            f"- Modus: mit KI-Experten-Kommentar "
+            f"({'neu erzeugen' if regenerate else 'aus Zwischenspeicher'})"
+        )
+        ex = get_expert_commentary(now, watchlist, news)
+        digest["expert"] = ex["text"]
+        digest["expert_stand"] = ex["stand"]
     else:
         print("- Modus: ohne KI (nur Schlagzeilen-Aggregation)")
 
