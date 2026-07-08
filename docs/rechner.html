@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verkaufs-Rechner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --pine:#14231c;
+    --pine-2:#1b3025;
+    --pine-3:#233d2f;
+    --line:#2f4c3c;
+    --brass:#c2a15f;
+    --brass-bright:#e0c489;
+    --ink:#ece9df;
+    --muted:#8ba596;
+    --muted-2:#6f8a7b;
+    --clay:#cd9070;
+    --field:#0f1a15;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    background:var(--pine);
+    color:var(--ink);
+    font-family:'Inter',system-ui,sans-serif;
+    line-height:1.5;
+    padding:28px 18px 60px;
+    font-variant-numeric:tabular-nums;
+  }
+  .wrap{max-width:560px;margin:0 auto}
+
+  header{margin-bottom:26px}
+  .eyebrow{
+    font-size:11px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--brass);font-weight:600;margin-bottom:8px;
+  }
+  h1{
+    font-family:'Fraunces',serif;font-weight:500;
+    font-size:34px;line-height:1.05;letter-spacing:-.01em;
+  }
+  h1 em{font-style:italic;color:var(--brass-bright)}
+  .sub{color:var(--muted);font-size:13.5px;margin-top:8px;max-width:44ch}
+
+  /* segmented toggle */
+  .seg{display:flex;gap:4px;background:var(--field);border:1px solid var(--line);
+    border-radius:12px;padding:4px;margin:22px 0 8px}
+  .seg button{
+    flex:1;border:none;background:transparent;color:var(--muted);
+    font-family:inherit;font-size:13px;font-weight:600;padding:9px 6px;
+    border-radius:8px;cursor:pointer;transition:.18s;letter-spacing:.01em;
+  }
+  .seg button.on{background:var(--brass);color:#1a1509}
+  .seg-hint{font-size:11.5px;color:var(--muted-2);margin:2px 2px 0;min-height:16px}
+
+  .panel{
+    background:var(--pine-2);border:1px solid var(--line);
+    border-radius:16px;padding:18px 18px 6px;margin-top:16px;
+  }
+  .panel h2{
+    font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--muted);font-weight:600;margin-bottom:14px;
+  }
+
+  .row{display:flex;align-items:center;justify-content:space-between;
+    gap:14px;padding:9px 0;border-bottom:1px solid rgba(47,76,60,.5)}
+  .row:last-child{border-bottom:none}
+  .row label{font-size:14px;color:var(--ink);flex:1}
+  .row label small{display:block;font-size:11.5px;color:var(--muted-2);margin-top:1px}
+  .ipt{position:relative;width:132px;flex:none}
+  .ipt input{
+    width:100%;background:var(--field);border:1px solid var(--line);
+    color:var(--ink);font-family:inherit;font-size:15px;font-weight:600;
+    text-align:right;padding:9px 26px 9px 12px;border-radius:9px;
+    font-variant-numeric:tabular-nums;transition:.15s;
+  }
+  .ipt input:focus{outline:none;border-color:var(--brass);
+    box-shadow:0 0 0 3px rgba(194,161,95,.15)}
+  .ipt .u{position:absolute;right:11px;top:50%;transform:translateY(-50%);
+    color:var(--muted-2);font-size:13px;pointer-events:none}
+  .ipt.pct .u{content:'%'}
+
+  /* checkbox row */
+  .check{display:flex;align-items:center;gap:11px;padding:11px 0 3px}
+  .check input{appearance:none;width:20px;height:20px;flex:none;
+    border:1.5px solid var(--line);border-radius:6px;background:var(--field);
+    cursor:pointer;position:relative;transition:.15s}
+  .check input:checked{background:var(--brass);border-color:var(--brass)}
+  .check input:checked::after{content:'';position:absolute;left:6px;top:2px;
+    width:5px;height:10px;border:solid #1a1509;border-width:0 2.5px 2.5px 0;
+    transform:rotate(45deg)}
+  .check label{font-size:13.5px;color:var(--ink);cursor:pointer}
+  .check.off{opacity:.4;pointer-events:none}
+
+  /* hero result */
+  .hero{
+    background:linear-gradient(160deg,var(--pine-3),var(--pine-2));
+    border:1px solid var(--brass);border-radius:18px;
+    padding:22px 22px 20px;margin-top:22px;position:relative;overflow:hidden;
+  }
+  .hero .cap{font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--brass);font-weight:600}
+  .hero .big{font-family:'Fraunces',serif;font-weight:500;
+    font-size:52px;line-height:1;margin:6px 0 2px;letter-spacing:-.02em}
+  .hero .big.neg{color:var(--clay)}
+  .hero .foot{font-size:13px;color:var(--muted)}
+
+  .gauge{margin-top:16px}
+  .gauge .lab{display:flex;justify-content:space-between;font-size:12px;
+    color:var(--muted);margin-bottom:6px}
+  .gauge .lab b{color:var(--brass-bright);font-weight:600}
+  .track{height:8px;background:var(--field);border-radius:5px;overflow:hidden}
+  .fill{height:100%;background:linear-gradient(90deg,var(--brass),var(--brass-bright));
+    border-radius:5px;transition:width .3s ease}
+  .fill.thin{background:linear-gradient(90deg,#b8794f,var(--clay))}
+
+  /* breakdown */
+  .bd{margin-top:4px}
+  .bd .line{display:flex;justify-content:space-between;font-size:13.5px;
+    padding:8px 0;border-bottom:1px solid rgba(47,76,60,.4);color:var(--ink)}
+  .bd .line span:first-child{color:var(--muted)}
+  .bd .line.minus span:last-child{color:var(--clay)}
+  .bd .line.total{border-bottom:none;border-top:1px solid var(--line);
+    margin-top:2px;padding-top:12px;font-weight:600;font-size:15px}
+  .bd .line.total span:first-child{color:var(--ink)}
+  .val{font-weight:600;font-variant-numeric:tabular-nums}
+
+  .note{font-size:12px;color:var(--muted-2);margin-top:16px;line-height:1.5}
+  .note b{color:var(--muted)}
+
+  .rev{margin-top:22px;border:1px dashed var(--line);border-radius:16px;
+    padding:18px;background:rgba(15,26,21,.5)}
+  .rev-cap{font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--brass);font-weight:600}
+  .rev-sub{font-size:12.5px;color:var(--muted);margin:6px 0 4px;line-height:1.5}
+  .rev-out{margin-top:6px;padding-top:14px;border-top:1px solid var(--line);text-align:center}
+  .rev-cap2{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  .rev-big{font-family:'Fraunces',serif;font-weight:500;font-size:44px;
+    line-height:1;margin:6px 0 4px;color:var(--brass-bright);letter-spacing:-.02em}
+  .rev-big.neg{color:var(--clay)}
+  .rev-foot{font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">IsoVault · Kalkulation</div>
+    <h1>Was bleibt <em>wirklich</em> übrig?</h1>
+    <p class="sub">Trag Verkaufspreis und Einkauf ein — der Rechner zieht eBay-Gebühr, Umsatzsteuer und deine ESt-Rücklage ab.</p>
+  </header>
+
+  <div class="seg" id="mode">
+    <button data-m="regel" class="on">Regelbesteuerung</button>
+    <button data-m="diff">Differenzbesteuerung</button>
+  </div>
+  <div class="seg-hint" id="modeHint">19 % USt auf den vollen Verkaufspreis, Vorsteuer abziehbar.</div>
+
+  <div class="panel">
+    <h2>Verkauf</h2>
+    <div class="row">
+      <label>Verkaufspreis (Artikel)<small>Zwischensumme, ohne Versand</small></label>
+      <div class="ipt"><input id="vk" inputmode="decimal" value="268,90"><span class="u">€</span></div>
+    </div>
+    <div class="row">
+      <label>Versand — vom Käufer bezahlt</label>
+      <div class="ipt"><input id="vsK" inputmode="decimal" value="6,19"><span class="u">€</span></div>
+    </div>
+    <div class="row">
+      <label>eBay-Transaktionsgebühr</label>
+      <div class="ipt"><input id="fee" inputmode="decimal" value="43,11"><span class="u">€</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Kosten</h2>
+    <div class="row">
+      <label>Einkaufspreis (brutto)<small>was dich der Artikel gekostet hat</small></label>
+      <div class="ipt"><input id="ek" inputmode="decimal" value="199,00"><span class="u">€</span></div>
+    </div>
+    <div class="row">
+      <label>Versandlabel — deine Kosten</label>
+      <div class="ipt"><input id="vsL" inputmode="decimal" value="0,00"><span class="u">€</span></div>
+    </div>
+    <div class="row">
+      <label>ESt-Rücklage</label>
+      <div class="ipt pct"><input id="est" inputmode="decimal" value="30"><span class="u">%</span></div>
+    </div>
+    <div class="check" id="vstWrap">
+      <input type="checkbox" id="vstEk" checked>
+      <label for="vstEk">Vorsteuer auf Einkauf abziehbar (Rechnung mit ausgewiesener USt)</label>
+    </div>
+  </div>
+
+  <div class="hero">
+    <div class="cap">Netto-Gewinn nach Steuern</div>
+    <div class="big" id="net">–</div>
+    <div class="foot" id="netFoot">frei verfügbar, ESt bereits zurückgestellt</div>
+    <div class="gauge">
+      <div class="lab"><span>Marge nach Steuern</span><b id="margeLab">–</b></div>
+      <div class="track"><div class="fill" id="margeFill" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Aufschlüsselung</h2>
+    <div class="bd">
+      <div class="line"><span>eBay-Auszahlung</span><span class="val" id="payout">–</span></div>
+      <div class="line minus"><span>− USt-Zahllast ans Finanzamt</span><span class="val" id="ust">–</span></div>
+      <div class="line minus"><span>− ESt-Rücklage</span><span class="val" id="ruck">–</span></div>
+      <div class="line minus"><span>− Einkauf (deine Auslage)</span><span class="val" id="ekOut">–</span></div>
+      <div class="line minus" id="labRow"><span>− Versandlabel</span><span class="val" id="labOut">–</span></div>
+      <div class="line total"><span>Netto-Gewinn</span><span class="val" id="net2">–</span></div>
+    </div>
+  </div>
+
+  <p class="note" id="note"></p>
+
+  <div class="rev">
+    <div class="rev-cap">Rückwärts rechnen</div>
+    <p class="rev-sub">Wie viel darf der Einkauf höchstens kosten, damit dein Ziel-Gewinn übrig bleibt? Nutzt Verkaufspreis, Gebühr und Modus von oben.</p>
+    <div class="row" style="border:none;padding:6px 0 12px">
+      <label>Ziel-Netto-Gewinn</label>
+      <div class="ipt"><input id="ziel" inputmode="decimal" value="40,00"><span class="u">€</span></div>
+    </div>
+    <div class="rev-out">
+      <div class="rev-cap2">Max. Einkaufspreis (brutto)</div>
+      <div class="rev-big" id="ekMax">–</div>
+      <div class="rev-foot" id="ekMaxFoot">–</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const MODE = {v:'regel'};
+  const $ = id => document.getElementById(id);
+  const num = id => {
+    const raw = $(id).value.replace(/\./g,'').replace(',','.').replace(/[^0-9.\-]/g,'');
+    const n = parseFloat(raw);
+    return isNaN(n) ? 0 : n;
+  };
+  const eur = n => n.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' €';
+  const V = 19/119; // USt-Anteil aus Brutto
+
+  // mode toggle
+  document.querySelectorAll('#mode button').forEach(b=>{
+    b.onclick = ()=>{
+      document.querySelectorAll('#mode button').forEach(x=>x.classList.remove('on'));
+      b.classList.add('on');
+      MODE.v = b.dataset.m;
+      const diff = MODE.v==='diff';
+      $('modeHint').textContent = diff
+        ? '19 % USt nur auf die Marge (Verkauf − Einkauf). Keine Vorsteuer auf die Ware.'
+        : '19 % USt auf den vollen Verkaufspreis, Vorsteuer abziehbar.';
+      $('vstWrap').classList.toggle('off', diff);
+      calc();
+    };
+  });
+
+  function calc(){
+    const vk=num('vk'), vsK=num('vsK'), fee=num('fee'),
+          ek=num('ek'), vsL=num('vsL'), estP=num('est')/100;
+    const bruttoUmsatz = vk + vsK;
+    const diff = MODE.v==='diff';
+    const vstEk = diff ? false : $('vstEk').checked;
+
+    // Vorsteuer aus Betriebskosten (eBay + Label) ist in beiden Modellen abziehbar
+    const vstFee = fee * V;
+    const vstLab = vsL * V;
+
+    let ustSale, ustZahllast, gewinn;
+
+    if(!diff){
+      ustSale = bruttoUmsatz * V;
+      const vstEkAmt = vstEk ? ek * V : 0;
+      ustZahllast = ustSale - vstFee - vstEkAmt - vstLab;
+      const umsatzNetto = bruttoUmsatz / 1.19;
+      const feeNetto = fee / 1.19;
+      const ekCost = vstEk ? ek/1.19 : ek;
+      const labCost = vsL/1.19;
+      gewinn = umsatzNetto - feeNetto - ekCost - labCost;
+    } else {
+      const marge = bruttoUmsatz - ek;
+      ustSale = marge > 0 ? marge * V : 0;
+      ustZahllast = ustSale - vstFee - vstLab;
+      const feeNetto = fee / 1.19;
+      const labNetto = vsL / 1.19;
+      gewinn = bruttoUmsatz - ustSale - feeNetto - ek - labNetto;
+    }
+
+    const ruck = gewinn > 0 ? gewinn * estP : 0;
+    const net = gewinn - ruck;
+    const payout = bruttoUmsatz - fee;
+
+    // hero
+    $('net').textContent = eur(net);
+    $('net').classList.toggle('neg', net < 0);
+    $('net2').textContent = eur(net);
+
+    // gauge — Marge nach Steuern relativ zum Einkauf (ROI)
+    const base = ek > 0 ? ek : bruttoUmsatz;
+    const margePct = base>0 ? (net/base)*100 : 0;
+    $('margeLab').textContent = (margePct>=0?'+':'') + margePct.toLocaleString('de-DE',{maximumFractionDigits:1}) + ' %';
+    const fillW = Math.max(0, Math.min(100, margePct));
+    $('margeFill').style.width = fillW + '%';
+    $('margeFill').classList.toggle('thin', margePct < 15);
+
+    // breakdown
+    $('payout').textContent = eur(payout);
+    $('ust').textContent = '−' + eur(Math.abs(ustZahllast)).replace('−','');
+    if(ustZahllast < 0){ $('ust').textContent = '+' + eur(-ustZahllast); } // Erstattung
+    $('ruck').textContent = '−' + eur(ruck);
+    $('ekOut').textContent = '−' + eur(ek);
+    $('labOut').textContent = '−' + eur(vsL);
+    $('labRow').style.display = vsL>0 ? 'flex' : 'none';
+
+    // note
+    let n = '';
+    if(!diff){
+      n = `<b>USt-Zahllast:</b> ${eur(ustSale)} aus dem Verkauf − ${eur(vstFee)} Vorsteuer (eBay)`;
+      if(vstEk) n += ` − ${eur(ek*V)} Vorsteuer (Einkauf)`;
+      if(vsL>0) n += ` − ${eur(vstLab)} (Versand)`;
+      n += `. Steuerlicher Gewinn vor ESt: <b>${eur(gewinn)}</b>.`;
+    } else {
+      const marge = bruttoUmsatz - ek;
+      n = `<b>Marge:</b> ${eur(marge)} → USt darauf ${eur(ustSale)}`;
+      n += ` − ${eur(vstFee)} Vorsteuer (eBay)`;
+      if(vsL>0) n += ` − ${eur(vstLab)} (Versand)`;
+      n += `. Steuerlicher Gewinn vor ESt: <b>${eur(gewinn)}</b>. Kein Vorsteuerabzug auf die Ware.`;
+    }
+    $('note').innerHTML = n;
+
+    // ---- Rückwärts: max. Einkauf für Ziel-Netto-Gewinn ----
+    const ziel = num('ziel');
+    const zielGewinn = estP < 1 ? ziel / (1 - estP) : ziel; // Gewinn vor ESt
+    const umsatzNetto = bruttoUmsatz / 1.19;
+    const feeNetto = fee / 1.19;
+    let ekMax;
+    if(!diff){
+      const labCost = vsL/1.19;
+      const rest = umsatzNetto - feeNetto - labCost - zielGewinn;
+      ekMax = vstEk ? rest * 1.19 : rest; // ohne VorSt ist EK direkt netto=brutto
+    } else {
+      const labNetto = vsL/1.19;
+      ekMax = (bruttoUmsatz*(1-V) - feeNetto - labNetto - zielGewinn) / (1 - V);
+    }
+    $('ekMax').textContent = eur(ekMax);
+    $('ekMax').classList.toggle('neg', ekMax <= 0);
+    const pctVk = vk>0 ? (ekMax/vk)*100 : 0;
+    $('ekMaxFoot').textContent = ekMax <= 0
+      ? 'Bei diesen Zahlen nicht erreichbar — Verkaufspreis zu niedrig.'
+      : `entspricht ${pctVk.toLocaleString('de-DE',{maximumFractionDigits:0})} % vom Verkaufspreis`;
+  }
+
+  document.querySelectorAll('input').forEach(i=> i.addEventListener('input', calc));
+  calc();
+</script>
+</body>
+</html>
