@@ -83,6 +83,18 @@
   .ipt .u{position:absolute;right:11px;top:50%;transform:translateY(-50%);
     color:var(--muted-2);font-size:13px;pointer-events:none}
   .ipt.pct .u{content:'%'}
+  .ipt input[readonly]{opacity:.65;cursor:default}
+  .ipt.wide{width:200px}
+  .ipt select{
+    width:100%;background:var(--field);border:1px solid var(--line);
+    color:var(--ink);font-family:inherit;font-size:13px;font-weight:600;
+    padding:9px 24px 9px 10px;border-radius:9px;appearance:none;
+    -webkit-appearance:none;cursor:pointer;transition:.15s;
+  }
+  .ipt select:focus{outline:none;border-color:var(--brass);
+    box-shadow:0 0 0 3px rgba(194,161,95,.15)}
+  .ipt.sel::after{content:'▾';position:absolute;right:10px;top:50%;
+    transform:translateY(-50%);color:var(--muted-2);font-size:11px;pointer-events:none}
 
   /* checkbox row */
   .check{display:flex;align-items:center;gap:11px;padding:11px 0 3px}
@@ -170,7 +182,26 @@
       <div class="ipt"><input id="vsK" inputmode="decimal" value="6,19"><span class="u">€</span></div>
     </div>
     <div class="row">
-      <label>eBay-Transaktionsgebühr</label>
+      <label>eBay-Kategorie<small>Gebühr automatisch — oder manuell eingeben</small></label>
+      <div class="ipt wide sel">
+        <select id="cat">
+          <option value="manual" selected>Manuell (€ eingeben)</option>
+          <option value="recom">Gebraucht / Refurbished (Re-Commerce)</option>
+          <option value="tech">Technik-Geräte (PC, Handy, Konsole …)</option>
+          <option value="std">Standardsatz (meiste Kategorien)</option>
+          <option value="techacc">Technik-Zubehör (Kabel, Hüllen …)</option>
+          <option value="fashion">Kleidung &amp; Accessoires</option>
+          <option value="garden">Garten &amp; Terrasse / Heimwerker</option>
+          <option value="sport">Sport, Baby, Möbel, Business &amp; Industrie</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" id="pctRow" style="display:none">
+      <label>Provisionssatz<small>anpassbar · plus 0,35 € Fixbetrag pro Bestellung</small></label>
+      <div class="ipt pct"><input id="feePct" inputmode="decimal" value="11"><span class="u">%</span></div>
+    </div>
+    <div class="row">
+      <label>eBay-Transaktionsgebühr<small id="feeHint"></small></label>
       <div class="ipt"><input id="fee" inputmode="decimal" value="43,11"><span class="u">€</span></div>
     </div>
   </div>
@@ -232,6 +263,11 @@
       <div class="rev-foot" id="ekMaxFoot">–</div>
     </div>
   </div>
+
+  <p class="note">Provisionssätze: eBay.de, gewerbliche Verkäufer, Stand 1. Juli 2026
+    (variable Provision auf Artikelpreis + Versand, plus 0,35 € Fixbetrag pro Bestellung;
+    gebrauchte/refurbished Artikel in ausgewählten Kategorien einheitlich 5 %).
+    Satz im %-Feld anpassbar, falls eBay die Gebühren ändert.</p>
 </div>
 
 <script>
@@ -244,6 +280,40 @@
   };
   const eur = n => n.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' €';
   const V = 19/119; // USt-Anteil aus Brutto
+
+  // eBay-Verkaufsprovision gewerblich (eBay.de, Stand 1. Juli 2026).
+  // p = Prozentsatz auf den Gesamtbetrag (Artikel + Versand);
+  // cap/p2 = Staffelung: über cap € gilt p2 % (nur Standardsatz).
+  // Satz ist im %-Feld editierbar, falls eBay die Gebühren ändert.
+  const EBAY_FIX = 0.35; // Fixbetrag pro Bestellung
+  const CATS = {
+    manual:  null,
+    recom:   {p:5},                    // gebraucht/refurbished (Re-Commerce)
+    tech:    {p:7},                    // Computer, Tablets, Handys, Konsolen …
+    std:     {p:11, cap:1990, p2:2},   // meiste Kategorien (Sammeln, Uhren, Autoteile …)
+    techacc: {p:12},                   // Handy-/Notebook-Zubehör, Kabel …
+    fashion: {p:12},                   // Kleidung & Accessoires
+    garden:  {p:13},                   // Garten & Terrasse, Heimwerker
+    sport:   {p:14}                    // Sport, Baby, Möbel, Business & Industrie
+  };
+
+  function autoFee(){
+    const c = CATS[$('cat').value];
+    if(!c) return null; // manueller Modus
+    const base = num('vk') + num('vsK');
+    const p = num('feePct')/100;
+    let f = (c.cap && base > c.cap)
+      ? c.cap*p + (base - c.cap)*(c.p2/100)
+      : base*p;
+    return Math.round((f + EBAY_FIX)*100)/100;
+  }
+
+  document.getElementById('cat').addEventListener('change', ()=>{
+    const c = CATS[$('cat').value];
+    $('pctRow').style.display = c ? 'flex' : 'none';
+    if(c) $('feePct').value = String(c.p).replace('.',',');
+    calc();
+  });
 
   // mode toggle
   document.querySelectorAll('#mode button').forEach(b=>{
@@ -261,6 +331,19 @@
   });
 
   function calc(){
+    const af = autoFee();
+    if(af !== null){
+      $('fee').value = af.toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2});
+      $('fee').readOnly = true;
+      const c = CATS[$('cat').value];
+      $('feeHint').textContent = 'automatisch: ' + $('feePct').value + ' % von '
+        + eur(num('vk')+num('vsK')) + ' + 0,35 €'
+        + (c.cap ? ' (Anteil über 1.990 €: ' + c.p2 + ' %)' : '');
+    } else {
+      $('fee').readOnly = false;
+      $('feeHint').textContent = '';
+    }
+
     const vk=num('vk'), vsK=num('vsK'), fee=num('fee'),
           ek=num('ek'), vsL=num('vsL'), estP=num('est')/100;
     const bruttoUmsatz = vk + vsK;
